@@ -13,19 +13,21 @@ const paymentRoutes = require('./modules/payments/payment.routes');
 const uploadRoutes = require('./modules/uploads/upload.routes');
 const bankRoutes = require('./modules/sellers/bank.routes');
 const reviewRoutes = require('./modules/reviews/review.routes');
-
+const trackingRoutes = require('./modules/tracking/tracking.routes');
 
 const app = express();
+
+// Health check FIRST (Render needs this)
+app.get('/', (req, res) => {
+  res.json({ message: '✅ Hyperlocal API is running' });
+});
 
 // Middleware
 app.use(helmet());
 app.use(cors());
 app.use(morgan('dev'));
 app.use('/api/payments/webhook', express.raw({ type: '*/*' }), paymentRoutes);
-
 app.use(express.json());
-app.use('/api/payments', paymentRoutes);
-
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -38,11 +40,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/sellers', bankRoutes);
 app.use('/api/reviews', reviewRoutes);
-
-// Health check
-app.get('/', (req, res) => {
-  res.json({ message: '✅ Hyperlocal API is running' });
-});
+app.use('/api/tracking', trackingRoutes);
 
 // 404 handler
 app.use((req, res) => {
