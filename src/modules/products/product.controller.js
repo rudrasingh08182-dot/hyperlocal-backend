@@ -1,11 +1,11 @@
 const pool = require('../../config/db');
-
 exports.searchProducts = async (req, res) => {
   try {
     const { q } = req.query;
     const result = await pool.query(
       `SELECT p.id, p.name, p.description, p.price, p.stock,
               p.category, p.image_urls, p.is_available,
+              p.unit_type, p.unit_weight, p.price_per_kg, p.return_policy,
               p.seller_id as shop_id, p.seller_id,
               s.shop_name, s.locality, s.id as seller_id
        FROM products p
