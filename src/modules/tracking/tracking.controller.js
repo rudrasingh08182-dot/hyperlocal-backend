@@ -48,8 +48,7 @@ const updateOrderStatus = async (req, res) => {
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
-
-   await pool.query(
+await pool.query(
   `UPDATE orders SET tracking_status = $1, status = $1 WHERE id = $2::uuid`,
   [status, orderId]
 );
