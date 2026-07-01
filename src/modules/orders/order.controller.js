@@ -55,7 +55,22 @@ exports.placeOrder = async (req, res) => {
        deliveryCharge, distanceKm, grandTotal,
        delivery_address, delivery_phone, delivery_landmark]
     );
- 
+    
+     const { sendNotification } = require('../config/firebase');
+
+// Get seller's FCM token
+const { rows: sellerRows } = await pool.query(
+  `SELECT fcm_token FROM sellers WHERE id = $1`,
+  [seller_id]
+);
+if (sellerRows[0]?.fcm_token) {
+  await sendNotification(
+    sellerRows[0].fcm_token,
+    '🛒 New Order!',
+    `You have a new order of ₹${total_amount}`
+  );
+}
+
     // Create order items & reduce stock
     for (const item of items) {
       const product = await pool.query('SELECT price FROM products WHERE id=$1::uuid', [item.product_id]);

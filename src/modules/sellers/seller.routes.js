@@ -17,6 +17,19 @@ router.get('/dashboard', auth, role('seller'), getDashboardStats);
 router.post('/bank-details', auth, saveBankDetails);  // 👈 ADD THIS
 router.get('/bank-details', auth, getBankDetails);    // 👈 ADD THIS
 
+router.post('/fcm-token', auth, async (req, res) => {
+  try {
+    const { token } = req.body;
+    await pool.query(
+      `UPDATE sellers SET fcm_token = $1 WHERE user_id = $2`,
+      [token, req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Confirm order
 router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
   try {
