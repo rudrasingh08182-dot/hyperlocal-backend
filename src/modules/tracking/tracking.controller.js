@@ -15,7 +15,7 @@ const getOrderTracking = async (req, res) => {
         s.shop_name,
         s.address as shop_address
        FROM orders o
-       LEFT JOIN users u ON o.assigned_delivery_id = u.id
+       LEFT JOIN users u ON o.delivery_boy_id = u.id
        LEFT JOIN sellers s ON o.seller_id = s.id
        WHERE o.id = $1::uuid AND o.buyer_id = $2::uuid`,
       [orderId, req.user.id]
