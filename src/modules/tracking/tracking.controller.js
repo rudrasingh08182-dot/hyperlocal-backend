@@ -61,7 +61,8 @@ await pool.query(
     );
 
     res.json({ success: true, status });
-  } catch (err) {
+ } catch (err) {
+    console.error('STATUS UPDATE ERROR:', err.message);
     res.status(500).json({ error: err.message });
   }
 };
