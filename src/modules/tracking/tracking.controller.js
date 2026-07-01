@@ -3,7 +3,6 @@
 const pool = require('../../config/db');
 
 // ── GET /tracking/:orderId ───────────────────────────────────
-// Buyer fetches full tracking info for their order
 const getOrderTracking = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -23,7 +22,6 @@ const getOrderTracking = async (req, res) => {
 
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
 
-    // Get tracking history log
     const { rows: log } = await pool.query(
       `SELECT * FROM order_tracking_log
        WHERE order_id = $1::uuid
@@ -38,7 +36,6 @@ const getOrderTracking = async (req, res) => {
 };
 
 // ── PATCH /tracking/:orderId/status ─────────────────────────
-// Delivery boy or seller updates order status
 const updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -48,10 +45,21 @@ const updateOrderStatus = async (req, res) => {
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
-await pool.query(
-  `UPDATE orders SET tracking_status = $1 WHERE id = $2::uuid`,
-  [status, orderId]
-);
+
+    // Update tracking_status (varchar) always
+    await pool.query(
+      `UPDATE orders SET tracking_status = $1 WHERE id = $2::uuid`,
+      [status, orderId]
+    );
+
+    // Update status (enum) only for valid enum values
+    const enumStatuses = ['pending', 'confirmed', 'picked_up', 'delivered', 'cancelled'];
+    if (enumStatuses.includes(status)) {
+      await pool.query(
+        `UPDATE orders SET status = $1::order_status WHERE id = $2::uuid`,
+        [status, orderId]
+      );
+    }
 
     // Log status change
     await pool.query(
@@ -61,14 +69,13 @@ await pool.query(
     );
 
     res.json({ success: true, status });
- } catch (err) {
+  } catch (err) {
     console.error('STATUS UPDATE ERROR:', err.message);
     res.status(500).json({ error: err.message });
   }
 };
 
 // ── PATCH /tracking/:orderId/location ───────────────────────
-// Delivery boy updates their live GPS location
 const updateDeliveryLocation = async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -92,7 +99,6 @@ const updateDeliveryLocation = async (req, res) => {
 };
 
 // ── GET /tracking/:orderId/location ─────────────────────────
-// Buyer polls for delivery boy's latest location
 const getDeliveryLocation = async (req, res) => {
   try {
     const { orderId } = req.params;
