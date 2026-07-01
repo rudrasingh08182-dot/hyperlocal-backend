@@ -8,11 +8,12 @@ const getOrderTracking = async (req, res) => {
     const { orderId } = req.params;
 
     const { rows } = await pool.query(
-      `SELECT o.*,
+       `SELECT o.*,
         u.name as delivery_boy_name,
         u.phone as delivery_boy_phone,
         s.shop_name,
-        s.address as shop_address
+        s.address as shop_address,
+        s.contact_phone as shop_phone
        FROM orders o
        LEFT JOIN users u ON o.delivery_boy_id = u.id
        LEFT JOIN sellers s ON o.seller_id = s.id
