@@ -17,7 +17,7 @@ const getOrderTracking = async (req, res) => {
        FROM orders o
        LEFT JOIN users u ON o.assigned_delivery_id = u.id
        LEFT JOIN sellers s ON o.seller_id = s.id
-       WHERE o.id = $1::uuid AND o.customer_id = $2::uuid`,
+       WHERE o.id = $1::uuid AND o.buyer_id = $2::uuid`,
       [orderId, req.user.id]
     );
 
@@ -49,10 +49,10 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
-    await pool.query(
-      `UPDATE orders SET tracking_status = $1, status = $2 WHERE id = $3::uuid`,
-      [status, status === 'delivered' ? 'delivered' : status === 'cancelled' ? 'cancelled' : 'confirmed', orderId]
-    );
+   await pool.query(
+  `UPDATE orders SET tracking_status = $1, status = $1 WHERE id = $2::uuid`,
+  [status, orderId]
+);
 
     // Log status change
     await pool.query(
@@ -99,7 +99,7 @@ const getDeliveryLocation = async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT delivery_lat, delivery_lng, location_updated_at, tracking_status
-       FROM orders WHERE id = $1::uuid AND customer_id = $2::uuid`,
+       FROM orders WHERE id = $1::uuid AND buyer_id = $2::uuid`,
       [orderId, req.user.id]
     );
 
