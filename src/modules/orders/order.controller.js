@@ -56,7 +56,7 @@ exports.placeOrder = async (req, res) => {
        delivery_address, delivery_phone, delivery_landmark]
     );
     
-     const { sendNotification } = require('../config/firebase');
+     const { sendNotification } = require('../../config/firebase');
 
 // Get seller's FCM token
 const { rows: sellerRows } = await pool.query(
