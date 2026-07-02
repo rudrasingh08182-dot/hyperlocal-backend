@@ -6,7 +6,7 @@ exports.placeOrder = async (req, res) => {
     const {
       seller_id, items, payment_method,
       delivery_address, delivery_phone, delivery_landmark,
-      buyer_lat, buyer_lng  // buyer's coordinates from frontend
+      buyer_lat, buyer_lng
     } = req.body;
  
     if (!items || items.length === 0) {
@@ -30,11 +30,11 @@ exports.placeOrder = async (req, res) => {
     const seller = sellerResult.rows[0];
  
     // Calculate delivery charge
-    let distanceKm    = null;
-    let deliveryCharge = 20; // default ₹20 if no coordinates
+    let distanceKm = null;
+    let deliveryCharge = 20;
  
     if (buyer_lat && buyer_lng && seller?.latitude && seller?.longitude) {
-      distanceKm     = calculateDistance(
+      distanceKm = calculateDistance(
         parseFloat(buyer_lat), parseFloat(buyer_lng),
         parseFloat(seller.latitude), parseFloat(seller.longitude)
       );
@@ -55,22 +55,43 @@ exports.placeOrder = async (req, res) => {
        deliveryCharge, distanceKm, grandTotal,
        delivery_address, delivery_phone, delivery_landmark]
     );
+
+    // Send WhatsApp notification to seller
     try {
-  const { sendNotification } = require('../../config/firebase');
-  const sellerFcm = await pool.query(
-    `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
-    [seller_id]
-  );
-  if (sellerFcm.rows[0]?.fcm_token) {
-    await sendNotification(
-      sellerFcm.rows[0].fcm_token,
-      '🛒 New Order!',
-      `You have a new order of ₹${total}`
-    );
-  }
-} catch (fcmErr) {
-  console.error('FCM ERROR:', fcmErr.message);
-}
+      const { sendWhatsApp } = require('../../config/whatsapp');
+      const sellerInfo = await pool.query(
+        `SELECT u.phone, s.shop_name FROM sellers s 
+         JOIN users u ON s.user_id = u.id 
+         WHERE s.id = $1::uuid`,
+        [seller_id]
+      );
+      if (sellerInfo.rows[0]?.phone) {
+        await sendWhatsApp(
+          sellerInfo.rows[0].phone,
+          `🛒 New Order on Zaplo!\n\nShop: ${sellerInfo.rows[0].shop_name}\nOrder Amount: ₹${total}\nOrder ID: #${order.rows[0].id.slice(-6).toUpperCase()}\n\nLogin to your dashboard to accept the order.`
+        );
+      }
+    } catch (waErr) {
+      console.error('WhatsApp notification error:', waErr.message);
+    }
+
+    // Send FCM notification
+    try {
+      const { sendNotification } = require('../../config/firebase');
+      const sellerFcm = await pool.query(
+        `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
+        [seller_id]
+      );
+      if (sellerFcm.rows[0]?.fcm_token) {
+        await sendNotification(
+          sellerFcm.rows[0].fcm_token,
+          '🛒 New Order!',
+          `You have a new order of ₹${total}`
+        );
+      }
+    } catch (fcmErr) {
+      console.error('FCM ERROR:', fcmErr.message);
+    }
 
     // Create order items & reduce stock
     for (const item of items) {
@@ -124,7 +145,6 @@ exports.getMyOrders = async (req, res) => {
   }
 };
 
-// Calculate distance between two coordinates (km)
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -135,9 +155,6 @@ function getDistance(lat1, lon1, lat2, lon2) {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   return R * c;
 }
-
-// Get available orders near delivery boy
-// Replace your existing getAvailableOrders in order.controller.js
 
 exports.getAvailableOrders = async (req, res) => {
   try {
@@ -158,24 +175,19 @@ exports.getAvailableOrders = async (req, res) => {
 
     let orders = result.rows;
 
-    // If GPS coordinates provided, calculate REAL distance using Haversine
     if (lat && lng) {
       orders = orders
         .map(order => {
           let distance_km = null;
-
           if (order.seller_lat && order.seller_lng) {
-            // Real distance using Haversine formula
             distance_km = getDistance(
               parseFloat(lat), parseFloat(lng),
               parseFloat(order.seller_lat), parseFloat(order.seller_lng)
             ).toFixed(1);
           }
-
           return { ...order, distance_km };
         })
         .sort((a, b) => {
-          // Sort by distance (nulls go to end)
           if (a.distance_km === null) return 1;
           if (b.distance_km === null) return -1;
           return a.distance_km - b.distance_km;
@@ -187,7 +199,7 @@ exports.getAvailableOrders = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-// Accept a delivery
+
 exports.acceptDelivery = async (req, res) => {
   try {
     const { id } = req.params;
@@ -212,7 +224,7 @@ exports.acceptDelivery = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-// Get my active deliveries
+
 exports.getMyDeliveries = async (req, res) => {
   try {
     const result = await pool.query(
@@ -237,12 +249,10 @@ exports.getMyDeliveries = async (req, res) => {
   }
 };
 
-// Mark as delivered
 exports.markDelivered = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // First check if order exists
     const check = await pool.query(
       'SELECT * FROM orders WHERE id = $1::uuid', [id]
     );
@@ -251,7 +261,6 @@ exports.markDelivered = async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Update - allow if delivery_boy_id matches OR if status is picked_up
     const result = await pool.query(
       `UPDATE orders SET status = 'delivered', delivered_at = NOW()
        WHERE id = $1::uuid 
@@ -269,7 +278,7 @@ exports.markDelivered = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-// Update delivery boy location
+
 exports.updateLocation = async (req, res) => {
   try {
     const { latitude, longitude } = req.body;

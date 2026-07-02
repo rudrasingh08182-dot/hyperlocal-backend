@@ -27,6 +27,7 @@
     "multer-storage-cloudinary": "^4.0.0",
     "pg": "^8.22.0",
     "razorpay": "^2.9.6",
+    "twilio": "^6.0.2",
     "uuid": "^14.0.1"
   },
   "devDependencies": {
