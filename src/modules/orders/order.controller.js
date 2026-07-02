@@ -55,20 +55,21 @@ exports.placeOrder = async (req, res) => {
        deliveryCharge, distanceKm, grandTotal,
        delivery_address, delivery_phone, delivery_landmark]
     );
-    
-     const { sendNotification } = require('../../config/firebase');
-
-// Get seller's FCM token
-const { rows: sellerRows } = await pool.query(
-  `SELECT fcm_token FROM sellers WHERE id = $1`,
-  [seller_id]
-);
-if (sellerRows[0]?.fcm_token) {
-  await sendNotification(
-    sellerRows[0].fcm_token,
-    '🛒 New Order!',
-    `You have a new order of ₹${total_amount}`
+    try {
+  const { sendNotification } = require('../../config/firebase');
+  const sellerFcm = await pool.query(
+    `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
+    [seller_id]
   );
+  if (sellerFcm.rows[0]?.fcm_token) {
+    await sendNotification(
+      sellerFcm.rows[0].fcm_token,
+      '🛒 New Order!',
+      `You have a new order of ₹${total}`
+    );
+  }
+} catch (fcmErr) {
+  console.error('FCM ERROR:', fcmErr.message);
 }
 
     // Create order items & reduce stock
