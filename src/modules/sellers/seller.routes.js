@@ -19,6 +19,7 @@ router.get('/bank-details', auth, getBankDetails);    // 👈 ADD THIS
 
 router.post('/fcm-token', auth, async (req, res) => {
   try {
+    const pool = require('../../config/db');
     const { token } = req.body;
     await pool.query(
       `UPDATE sellers SET fcm_token = $1 WHERE user_id = $2`,
@@ -29,7 +30,33 @@ router.post('/fcm-token', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
+// Get seller's orders
+router.get('/my-orders', auth, role('seller'), async (req, res) => {
+  try {
+    const pool = require('../../config/db');
+    const result = await pool.query(
+      `SELECT o.*, u.name as buyer_name,
+              json_agg(json_build_object(
+                'product_id', oi.product_id,
+                'quantity', oi.quantity,
+                'unit_price', oi.unit_price,
+                'name', p.name
+              )) as items
+       FROM orders o
+       JOIN users u ON o.buyer_id = u.id
+       JOIN order_items oi ON oi.order_id = o.id
+       JOIN products p ON oi.product_id = p.id
+       JOIN sellers s ON o.seller_id = s.id
+       WHERE s.user_id = $1
+       GROUP BY o.id, u.name
+       ORDER BY o.created_at DESC`,
+      [req.user.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // Confirm order
 router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
   try {
