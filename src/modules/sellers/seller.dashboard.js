@@ -34,14 +34,20 @@ exports.getDashboardStats = async (req, res) => {
         FROM seller_ledger WHERE seller_id = $1
       `, [sellerId]),
 
-      // Recent orders with buyer info
+      // Recent orders with buyer info and items
       pool.query(`
         SELECT o.id, o.total_amount, o.status, o.payment_method,
                o.created_at, u.name as buyer_name,
-               COUNT(oi.id) as item_count
+               COUNT(oi.id) as item_count,
+               json_agg(json_build_object(
+                 'name', p.name,
+                 'quantity', oi.quantity,
+                 'unit_price', oi.unit_price
+               )) as items
         FROM orders o
         JOIN users u ON o.buyer_id = u.id
         JOIN order_items oi ON oi.order_id = o.id
+        JOIN products p ON oi.product_id = p.id
         WHERE o.seller_id = $1
         GROUP BY o.id, u.name
         ORDER BY o.created_at DESC LIMIT 10
@@ -122,30 +128,25 @@ exports.createProduct = async (req, res) => {
       return_policy
     } = req.body;
 
-    // Validate required fields
     if (!name || !price || !stock || !return_policy) {
       return res.status(400).json({ error: 'name, price, stock, return_policy are required' });
     }
 
-    // Validate return policy
-    const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS'];
+    const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS', 'STATIONERY', 'FASHION', 'GROCERY', 'FRESH'];
     if (!validPolicies.includes(return_policy)) {
       return res.status(400).json({ error: `Invalid return_policy. Must be one of: ${validPolicies.join(', ')}` });
     }
 
-    // Image is mandatory
     if (!image_urls || image_urls.length === 0) {
       return res.status(400).json({ error: 'At least one product image is required' });
     }
 
-    // Get seller profile
     const seller = await client.query(
       'SELECT id, status FROM sellers WHERE user_id = $1', [req.user.id]
     );
     if (!seller.rows[0]) throw new Error('Seller profile not found');
     if (seller.rows[0].status !== 'approved') throw new Error('Seller not approved yet');
 
-    // Check SKU uniqueness if provided
     if (sku) {
       const skuCheck = await client.query(
         'SELECT id FROM products WHERE sku = $1', [sku]
@@ -153,25 +154,24 @@ exports.createProduct = async (req, res) => {
       if (skuCheck.rows.length > 0) throw new Error('SKU already exists');
     }
 
-    // Price in paise for safety
     const pricePaise = Math.round(parseFloat(price) * 100);
     if (pricePaise <= 0) throw new Error('Price must be greater than 0');
 
-   const result = await client.query(
-  `INSERT INTO products
-   (seller_id, name, description, sku, price, stock,
-    category, image_urls, return_policy, is_available,
-    unit_type, unit_weight, price_per_kg)
-   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-   RETURNING *`,
-  [seller.rows[0].id, name, description, sku,
-   pricePaise / 100, parseInt(stock),
-   category, image_urls, return_policy,
-   parseInt(stock) > 0,
-   req.body.unit_type || 'piece',
-   req.body.unit_weight || null,
-   req.body.price_per_kg || null]
-);
+    const result = await client.query(
+      `INSERT INTO products
+       (seller_id, name, description, sku, price, stock,
+        category, image_urls, return_policy, is_available,
+        unit_type, unit_weight, price_per_kg)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING *`,
+      [seller.rows[0].id, name, description, sku,
+       pricePaise / 100, parseInt(stock),
+       category, image_urls, return_policy,
+       parseInt(stock) > 0,
+       req.body.unit_type || 'piece',
+       req.body.unit_weight || null,
+       req.body.price_per_kg || null]
+    );
 
     await client.query('COMMIT');
     res.status(201).json({
