@@ -132,7 +132,7 @@ exports.createProduct = async (req, res) => {
       return res.status(400).json({ error: 'name, price, stock, return_policy are required' });
     }
 
-    const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS', 'STATIONERY', 'FASHION', 'GROCERY', 'FRESH'];
+    const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS', 'STATIONERY', 'FASHION', 'GROCERY', 'FRESH', 'MEDICAL'];
     if (!validPolicies.includes(return_policy)) {
       return res.status(400).json({ error: `Invalid return_policy. Must be one of: ${validPolicies.join(', ')}` });
     }
