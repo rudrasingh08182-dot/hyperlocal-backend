@@ -14,17 +14,16 @@ exports.getDashboardStats = async (req, res) => {
 
       // Total sales stats
       pool.query(`
-        SELECT
-          COUNT(*) as total_orders,
-          COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_orders,
-          COUNT(CASE WHEN status = 'delivered' THEN 1 END) as delivered_orders,
-          COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders,
-          COALESCE(SUM(total_amount), 0) as gross_sales,
-          COALESCE(SUM(CASE WHEN DATE(created_at) = CURRENT_DATE THEN total_amount ELSE 0 END), 0) as today_sales,
-          COALESCE(SUM(CASE WHEN DATE_TRUNC('month', created_at) = DATE_TRUNC('month', NOW()) THEN total_amount ELSE 0 END), 0) as monthly_sales
-        FROM orders WHERE seller_id = $1
-      `, [sellerId]),
-
+  SELECT
+    COUNT(*) as total_orders,
+    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_orders,
+    COUNT(CASE WHEN status = 'delivered' THEN 1 END) as delivered_orders,
+    COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders,
+    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled') THEN total_amount ELSE 0 END), 0) as gross_sales,
+    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled') AND DATE(created_at) = CURRENT_DATE THEN total_amount ELSE 0 END), 0) as today_sales,
+    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled') AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', NOW()) THEN total_amount ELSE 0 END), 0) as monthly_sales
+  FROM orders WHERE seller_id = $1
+`, [sellerId]),
       // Ledger balance
       pool.query(`
         SELECT
@@ -35,23 +34,24 @@ exports.getDashboardStats = async (req, res) => {
       `, [sellerId]),
 
       // Recent orders with buyer info and items
-      pool.query(`
-        SELECT o.id, o.total_amount, o.status, o.payment_method,
-               o.created_at, u.name as buyer_name,
-               COUNT(oi.id) as item_count,
-               json_agg(json_build_object(
-                 'name', p.name,
-                 'quantity', oi.quantity,
-                 'unit_price', oi.unit_price
-               )) as items
-        FROM orders o
-        JOIN users u ON o.buyer_id = u.id
-        JOIN order_items oi ON oi.order_id = o.id
-        JOIN products p ON oi.product_id = p.id
-        WHERE o.seller_id = $1
-        GROUP BY o.id, u.name
-        ORDER BY o.created_at DESC LIMIT 10
-      `, [sellerId]),
+     pool.query(`
+  SELECT o.id, o.total_amount, o.status, o.payment_method,
+         o.created_at, u.name as buyer_name,
+         o.delivery_phone, o.delivery_address, o.delivery_landmark,
+         COUNT(oi.id) as item_count,
+         json_agg(json_build_object(
+           'name', p.name,
+           'quantity', oi.quantity,
+           'unit_price', oi.unit_price
+         )) as items
+  FROM orders o
+  JOIN users u ON o.buyer_id = u.id
+  JOIN order_items oi ON oi.order_id = o.id
+  JOIN products p ON oi.product_id = p.id
+  WHERE o.seller_id = $1
+  GROUP BY o.id, u.name, o.delivery_phone, o.delivery_address, o.delivery_landmark
+  ORDER BY o.created_at DESC LIMIT 10
+`, [sellerId]),
 
       // Top selling products
       pool.query(`
@@ -60,7 +60,7 @@ exports.getDashboardStats = async (req, res) => {
                COALESCE(SUM(oi.quantity * oi.unit_price), 0) as total_revenue
         FROM products p
         LEFT JOIN order_items oi ON oi.product_id = p.id
-        LEFT JOIN orders o ON oi.order_id = o.id AND o.status != 'cancelled'
+        LEFT JOIN orders o ON oi.order_id = o.id AND o.status NOT IN ('cancelled', 'pending')
         WHERE p.seller_id = $1
         GROUP BY p.id
         ORDER BY total_sold DESC LIMIT 5
@@ -75,7 +75,7 @@ exports.getDashboardStats = async (req, res) => {
         FROM orders
         WHERE seller_id = $1
         AND created_at >= NOW() - INTERVAL '7 days'
-        AND status != 'cancelled'
+       AND status NOT IN ('cancelled', 'pending')
         GROUP BY DATE_TRUNC('day', created_at)
         ORDER BY DATE_TRUNC('day', created_at)
       `, [sellerId]),
