@@ -1,16 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const { register, login } = require('./auth.controller');
+const { sendOtp, verifyOtp, resetPassword, requireVerifiedRegistrationToken } = require('./otp.controller');
 const pool = require('../../config/db');
 
-// POST /api/auth/register
-router.post('/register', register);
+// ── OTP routes (new) ──
+router.post('/send-otp', sendOtp);
+router.post('/verify-otp', verifyOtp);
+router.post('/reset-password', resetPassword);
+
+// POST /api/auth/register  (now requires OTP verification first)
+router.post('/register', requireVerifiedRegistrationToken, register);
 
 // POST /api/auth/login
 router.post('/login', login);
 
 // POST /api/auth/register-seller (register user + shop in one step)
-router.post('/register-seller', async (req, res) => {
+router.post('/register-seller', requireVerifiedRegistrationToken, async (req, res) => {
   try {
     const { username, name, phone, password, shop_name, address, locality, contact_phone } = req.body;
 
@@ -55,7 +61,8 @@ router.post('/register-seller', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router.post('/register-delivery', async (req, res) => {
+
+router.post('/register-delivery', requireVerifiedRegistrationToken, async (req, res) => {
   try {
     const {
       username, name, phone, password,
@@ -103,4 +110,5 @@ router.post('/register-delivery', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 module.exports = router;
