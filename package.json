@@ -13,6 +13,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "adm-zip": "^0.5.18",
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^1.41.3",
@@ -27,8 +28,10 @@
     "multer-storage-cloudinary": "^4.0.0",
     "pg": "^8.22.0",
     "razorpay": "^2.9.6",
+    "streamifier": "^0.1.1",
     "twilio": "^6.0.2",
-    "uuid": "^14.0.1"
+    "uuid": "^14.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
