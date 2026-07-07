@@ -8,31 +8,53 @@ exports.placeOrder = async (req, res) => {
       delivery_address, delivery_phone, delivery_landmark,
       buyer_lat, buyer_lng
     } = req.body;
- 
+
     if (!items || items.length === 0) {
       return res.status(400).json({ error: 'No items in order' });
     }
- 
-    // Calculate items total
+
+    // ── Calculate items total (variant-aware) ──
     let total = 0;
+    // itemDetails caches what we looked up, so we don't re-query in the insert loop below
+    const itemDetails = [];
+
     for (const item of items) {
-      const product = await pool.query('SELECT price, stock FROM products WHERE id=$1::uuid', [item.product_id]);
+      const product = await pool.query('SELECT id, price, stock, has_variants FROM products WHERE id=$1::uuid', [item.product_id]);
       if (!product.rows[0]) return res.status(404).json({ error: 'Product not found' });
-      if (product.rows[0].stock < item.quantity) return res.status(400).json({ error: 'Insufficient stock' });
-      total += product.rows[0].price * item.quantity;
+
+      if (item.variant_id) {
+        // Variant purchase — price/stock come from product_variants, NOT the base product
+        const variant = await pool.query(
+          `SELECT id, variant_type, variant_value, price, stock
+           FROM product_variants
+           WHERE id = $1::uuid AND product_id = $2::uuid AND status = 'active'`,
+          [item.variant_id, item.product_id]
+        );
+        if (!variant.rows[0]) return res.status(404).json({ error: 'Product variant not found' });
+        if (variant.rows[0].stock < item.quantity) {
+          return res.status(400).json({ error: `Insufficient stock for ${variant.rows[0].variant_value}` });
+        }
+        total += parseFloat(variant.rows[0].price) * item.quantity;
+        itemDetails.push({ ...item, unit_price: variant.rows[0].price, variant: variant.rows[0] });
+      } else {
+        // Simple product purchase — unchanged behavior
+        if (product.rows[0].stock < item.quantity) return res.status(400).json({ error: 'Insufficient stock' });
+        total += parseFloat(product.rows[0].price) * item.quantity;
+        itemDetails.push({ ...item, unit_price: product.rows[0].price, variant: null });
+      }
     }
- 
+
     // Get seller's coordinates for distance calculation
     const sellerResult = await pool.query(
       'SELECT latitude, longitude FROM sellers WHERE id = $1::uuid',
       [seller_id]
     );
     const seller = sellerResult.rows[0];
- 
+
     // Calculate delivery charge
     let distanceKm = null;
     let deliveryCharge = 20;
- 
+
     if (buyer_lat && buyer_lng && seller?.latitude && seller?.longitude) {
       distanceKm = calculateDistance(
         parseFloat(buyer_lat), parseFloat(buyer_lng),
@@ -40,9 +62,9 @@ exports.placeOrder = async (req, res) => {
       );
       deliveryCharge = calculateDeliveryCharge(distanceKm);
     }
- 
+
     const grandTotal = parseFloat(total) + deliveryCharge;
- 
+
     // Create order
     const order = await pool.query(
       `INSERT INTO orders 
@@ -93,20 +115,36 @@ exports.placeOrder = async (req, res) => {
       console.error('FCM ERROR:', fcmErr.message);
     }
 
-    // Create order items & reduce stock
-    for (const item of items) {
-      const product = await pool.query('SELECT price FROM products WHERE id=$1::uuid', [item.product_id]);
+    // ── Create order items & reduce stock (variant-aware) ──
+    for (const item of itemDetails) {
       await pool.query(
-        `INSERT INTO order_items (order_id, product_id, quantity, unit_price)
-         VALUES ($1, $2::uuid, $3, $4)`,
-        [order.rows[0].id, item.product_id, item.quantity, product.rows[0].price]
+        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value)
+         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7)`,
+        [
+          order.rows[0].id,
+          item.product_id,
+          item.quantity,
+          item.unit_price,
+          item.variant_id || null,
+          item.variant?.variant_type || null,
+          item.variant?.variant_value || null,
+        ]
       );
-      await pool.query(
-        `UPDATE products SET stock = stock - $1 WHERE id=$2::uuid`,
-        [item.quantity, item.product_id]
-      );
+
+      if (item.variant_id) {
+        // Reduce the VARIANT's stock — base product stock is untouched
+        await pool.query(
+          `UPDATE product_variants SET stock = stock - $1 WHERE id = $2::uuid`,
+          [item.quantity, item.variant_id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE products SET stock = stock - $1 WHERE id=$2::uuid`,
+          [item.quantity, item.product_id]
+        );
+      }
     }
- 
+
     res.status(201).json({
       message: 'Order placed successfully!',
       order: order.rows[0],
@@ -114,12 +152,12 @@ exports.placeOrder = async (req, res) => {
       distance_km: distanceKm,
       grand_total: grandTotal,
     });
- 
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
- 
+
 exports.getMyOrders = async (req, res) => {
   try {
     const result = await pool.query(
@@ -128,7 +166,9 @@ exports.getMyOrders = async (req, res) => {
                 'product_id', oi.product_id,
                 'quantity', oi.quantity,
                 'unit_price', oi.unit_price,
-                'name', p.name
+                'name', p.name,
+                'variant_type', oi.variant_type,
+                'variant_value', oi.variant_value
               )) as items
        FROM orders o
        JOIN sellers s ON o.seller_id = s.id
