@@ -117,15 +117,15 @@ exports.getDashboardStats = async (req, res) => {
 };
 
 // POST /api/products — Production ready product creation
+// POST /api/products — Production ready product creation (now supports optional variants)
 exports.createProduct = async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const {
-      name, description, sku, price,
-      stock, category, image_urls,
-      return_policy
+      name, description, sku, price, stock, category, image_urls,
+      return_policy, variants, // variants is OPTIONAL: array of { variant_type, variant_value, price, stock, display_order }
     } = req.body;
 
     if (!name || !price || !stock || !return_policy) {
@@ -139,6 +139,34 @@ exports.createProduct = async (req, res) => {
 
     if (!image_urls || image_urls.length === 0) {
       return res.status(400).json({ error: 'At least one product image is required' });
+    }
+
+    // ── Validate variants BEFORE touching the database ──
+    const hasVariants = Array.isArray(variants) && variants.length > 0;
+    if (hasVariants) {
+      const seenValues = new Set();
+      const seenOrders = new Set();
+      for (const v of variants) {
+        if (!v.variant_type || !v.variant_value) {
+          throw new Error('Each variant must have a variant_type and variant_value');
+        }
+        if (!v.price || parseFloat(v.price) <= 0) {
+          throw new Error(`Variant "${v.variant_value}" must have a price greater than 0`);
+        }
+        if (v.stock === undefined || v.stock === null || parseInt(v.stock) < 0) {
+          throw new Error(`Variant "${v.variant_value}" must have a valid stock quantity`);
+        }
+        const valueKey = v.variant_value.toLowerCase().trim();
+        if (seenValues.has(valueKey)) {
+          throw new Error(`Duplicate variant value: "${v.variant_value}"`);
+        }
+        seenValues.add(valueKey);
+
+        if (seenOrders.has(v.display_order)) {
+          throw new Error(`Duplicate display_order: ${v.display_order}`);
+        }
+        seenOrders.add(v.display_order);
+      }
     }
 
     const seller = await client.query(
@@ -157,12 +185,13 @@ exports.createProduct = async (req, res) => {
     const pricePaise = Math.round(parseFloat(price) * 100);
     if (pricePaise <= 0) throw new Error('Price must be greater than 0');
 
+    // ── Create the product (price/stock here act as the "base" price/stock) ──
     const result = await client.query(
       `INSERT INTO products
        (seller_id, name, description, sku, price, stock,
         category, image_urls, return_policy, is_available,
-        unit_type, unit_weight, price_per_kg)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        unit_type, unit_weight, price_per_kg, has_variants)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
       [seller.rows[0].id, name, description, sku,
        pricePaise / 100, parseInt(stock),
@@ -170,13 +199,28 @@ exports.createProduct = async (req, res) => {
        parseInt(stock) > 0,
        req.body.unit_type || 'piece',
        req.body.unit_weight || null,
-       req.body.price_per_kg || null]
+       req.body.price_per_kg || null,
+       hasVariants]
     );
+
+    const product = result.rows[0];
+
+    // ── Create variant rows, if any ──
+    if (hasVariants) {
+      for (const v of variants) {
+        await client.query(
+          `INSERT INTO product_variants
+           (product_id, variant_type, variant_value, price, stock, display_order)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [product.id, v.variant_type, v.variant_value, parseFloat(v.price), parseInt(v.stock), parseInt(v.display_order) || 0]
+        );
+      }
+    }
 
     await client.query('COMMIT');
     res.status(201).json({
       message: 'Product created successfully',
-      product: result.rows[0]
+      product,
     });
 
   } catch (err) {

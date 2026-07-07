@@ -6,13 +6,29 @@ exports.searchProducts = async (req, res) => {
       `SELECT p.id, p.name, p.description, p.price, p.stock,
               p.category, p.image_urls, p.is_available,
               p.unit_type, p.unit_weight, p.price_per_kg, p.return_policy,
+              p.has_variants,
               p.seller_id as shop_id, p.seller_id,
-              s.shop_name, s.locality, s.id as seller_id
+              s.shop_name, s.locality, s.id as seller_id,
+              COALESCE(
+                (SELECT json_agg(
+                   json_build_object(
+                     'id', pv.id,
+                     'variant_type', pv.variant_type,
+                     'variant_value', pv.variant_value,
+                     'price', pv.price,
+                     'stock', pv.stock,
+                     'display_order', pv.display_order
+                   ) ORDER BY pv.display_order
+                 )
+                 FROM product_variants pv
+                 WHERE pv.product_id = p.id AND pv.status = 'active'
+                ), '[]'::json
+              ) as variants
        FROM products p
        JOIN sellers s ON p.seller_id = s.id
        WHERE s.status = 'approved'
        AND p.is_available = true
-       AND p.stock > 0
+       AND (p.has_variants = true OR p.stock > 0)
        AND (p.name ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1)
        ORDER BY p.price ASC`,
       [`%${q || ''}%`]
