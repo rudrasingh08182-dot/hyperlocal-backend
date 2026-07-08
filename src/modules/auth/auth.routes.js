@@ -21,8 +21,17 @@ router.post('/register-seller', requireVerifiedRegistrationToken, async (req, re
     const { username, name, phone, password, shop_name, address, locality, contact_phone } = req.body;
 
     if (!username || !name || !phone || !password || !shop_name || !address || !locality) {
-      return res.status(400).json({ error: 'All fields are required' });
-    }
+  return res.status(400).json({ error: 'All fields are required' });
+}
+
+// Password length validation
+if (!password || password.length < 8 || password.length > 128) {
+  return res.status(400).json({
+    error: 'Password must be between 8 and 128 characters.'
+  });
+}
+
+const bcrypt = require('bcryptjs');
 
     const bcrypt = require('bcryptjs');
 
@@ -70,10 +79,17 @@ router.post('/register-delivery', requireVerifiedRegistrationToken, async (req, 
     } = req.body;
 
     if (!username || !name || !phone || !password) {
-      return res.status(400).json({ error: 'All fields are required' });
-    }
+  return res.status(400).json({ error: 'All fields are required' });
+}
 
-    const bcrypt = require('bcryptjs');
+// Password length validation
+if (!password || password.length < 8 || password.length > 128) {
+  return res.status(400).json({
+    error: 'Password must be between 8 and 128 characters.'
+  });
+}
+
+const bcrypt = require('bcryptjs');
 
     // Check existing
     const existing = await pool.query(

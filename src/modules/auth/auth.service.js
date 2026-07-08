@@ -3,6 +3,17 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const registerUser = async ({ username, name, phone, password, role }) => {
+  // ── Security: hard cap BEFORE bcrypt hashing ──
+  if (typeof password !== 'string' || password.length > 128) {
+    throw new Error('Password must be between 8 and 128 characters.');
+  }
+  if (typeof phone !== 'string' || phone.length > 15) {
+    throw new Error('Invalid phone number');
+  }
+  if (typeof username !== 'string' || username.length > 50) {
+    throw new Error('Username too long');
+  }
+
   const existing = await pool.query(
     'SELECT id FROM users WHERE phone = $1 OR username = $2',
     [phone, username]
@@ -25,6 +36,14 @@ const registerUser = async ({ username, name, phone, password, role }) => {
 };
 
 const loginUser = async ({ phone, password }) => {
+  // ── Security: hard cap BEFORE bcrypt.compare ──
+  if (typeof password !== 'string' || password.length > 128) {
+    throw new Error('Invalid phone or password');
+  }
+  if (typeof phone !== 'string' || phone.length > 15) {
+    throw new Error('Invalid phone or password');
+  }
+
   const result = await pool.query(
     'SELECT * FROM users WHERE phone = $1',
     [phone]

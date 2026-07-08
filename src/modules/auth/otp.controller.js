@@ -15,9 +15,19 @@ const MAX_VERIFY_ATTEMPTS = 5;
 // POST /auth/send-otp
 // body: { phone, purpose } — purpose: 'register' | 'forgot_password'
 // ─────────────────────────────────────────────
-exports.sendOtp = async (req, res) => {
+
+
+    exports.sendOtp = async (req, res) => {
   try {
     const { phone, purpose } = req.body;
+
+    // ── Security: reject oversized input BEFORE any processing ──
+    if (typeof phone !== 'string' || phone.length > 15) {
+      return res.status(400).json({ error: 'Invalid Mobile Number' });
+    }
+    if (typeof purpose !== 'string' || purpose.length > 20) {
+      return res.status(400).json({ error: 'Invalid purpose' });
+    }
 
     if (!isValidIndianMobile(phone)) {
       return res.status(400).json({ error: 'Invalid Mobile Number' });
@@ -95,6 +105,14 @@ exports.verifyOtp = async (req, res) => {
   try {
     const { phone, otp, purpose } = req.body;
 
+    // ── Security: reject oversized input BEFORE any processing ──
+    if (typeof phone !== 'string' || phone.length > 15) {
+      return res.status(400).json({ error: 'Invalid request' });
+    }
+    if (typeof otp !== 'string' || otp.length > 6) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
     if (!phone || !otp || !purpose) {
       return res.status(400).json({ error: 'phone, otp, and purpose are required' });
     }
@@ -154,6 +172,14 @@ exports.verifyOtp = async (req, res) => {
 exports.resetPassword = async (req, res) => {
   try {
     const { phone, token, newPassword } = req.body;
+
+    // ── Security: hard cap BEFORE regex validation or bcrypt hashing ──
+    if (typeof newPassword !== 'string' || newPassword.length > 128) {
+      return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+    }
+    if (typeof phone !== 'string' || phone.length > 15) {
+      return res.status(400).json({ error: 'Invalid request' });
+    }
 
     if (!phone || !token || !newPassword) {
       return res.status(400).json({ error: 'phone, token, and newPassword are required' });
