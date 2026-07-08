@@ -88,7 +88,7 @@ exports.validateBulkUpload = async (req, res) => {
     const seenNames = new Set();
     const matchedVariantProducts = new Set(); // tracks which variant groups got used
 
-    rows.forEach((row, idx) => {
+   rows.forEach((row, idx) => {
       const rowNum = idx + 2;
       const name = String(row['Product Name'] || '').trim();
       const priceRaw = row['Price'];
@@ -105,15 +105,29 @@ exports.validateBulkUpload = async (req, res) => {
       if (seenNames.has(name.toLowerCase())) errors.push('Duplicate product name in this file');
       seenNames.add(name.toLowerCase());
 
-      const priceMatch = String(priceRaw || '').match(/[\d.]+/);
-      const price = priceMatch ? parseFloat(priceMatch[0]) : NaN;
-      if (!priceRaw || isNaN(price) || price <= 0) errors.push(`Invalid price "${priceRaw}"`);
+      const nameKey = name.toLowerCase();
+      const hasVariants = variantGroups.has(nameKey);
+
+      // ── Price: required for Simple Products, optional (auto-computed) for Variant Products ──
+      let price = null;
+      if (!hasVariants) {
+        const priceMatch = String(priceRaw || '').match(/[\d.]+/);
+        price = priceMatch ? parseFloat(priceMatch[0]) : NaN;
+        if (!priceRaw || isNaN(price) || price <= 0) {
+          errors.push(`Invalid price "${priceRaw}"`);
+        }
+      }
+
+      // ── Stock: required for Simple Products, optional (auto-computed) for Variant Products ──
+      let stock = null;
+      if (!hasVariants) {
+        stock = parseInt(stockRaw);
+        if (stockRaw === '' || isNaN(stock) || stock < 0) {
+          errors.push(`Invalid stock quantity "${stockRaw}"`);
+        }
+      }
 
       if (!isValidCategory(category)) errors.push(`Invalid category "${row['Category']}"`);
-
-      const stock = parseInt(stockRaw);
-      if (stockRaw === '' || isNaN(stock) || stock < 0) errors.push(`Invalid stock quantity "${stockRaw}"`);
-
       if (!isValidUnitType(unitType)) errors.push(`Invalid "Sold By" value "${row['Sold By']}"`);
 
       if (!imageFileName) errors.push('Image File Name is missing');
@@ -132,8 +146,7 @@ exports.validateBulkUpload = async (req, res) => {
 
       // ── Check for variants belonging to this product ──
       let variants = null;
-      const nameKey = name.toLowerCase();
-      if (variantGroups.has(nameKey)) {
+      if (hasVariants) {
         matchedVariantProducts.add(nameKey);
         const group = validateVariantGroup(variantGroups.get(nameKey));
         if (!group.valid) {
@@ -142,6 +155,11 @@ exports.validateBulkUpload = async (req, res) => {
           return;
         }
         variants = group.variants;
+
+        // Auto-calculate: product.price = minimum variant price
+        price = Math.min(...variants.map(v => Number(v.price)));
+        // Auto-calculate: product.stock = sum of all variant stock
+        stock = variants.reduce((sum, v) => sum + Number(v.stock), 0);
       }
 
       valid.push({
