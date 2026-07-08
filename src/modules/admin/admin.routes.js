@@ -26,7 +26,7 @@ router.patch('/delivery-boys/:id/suspend', suspendDeliveryBoy);
 // Bulk product upload
 router.post(
   '/bulk-upload/validate',
-  upload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }]),
+  upload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }, { name: 'variants', maxCount: 1 }]),
   validateBulkUpload
 );
 router.post('/bulk-upload/:uploadId/import', importBulkUpload);
