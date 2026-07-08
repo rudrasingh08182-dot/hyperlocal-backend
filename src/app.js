@@ -27,7 +27,10 @@ app.use(helmet());
 app.use(cors());
 app.use(morgan('dev'));
 app.use('/api/payments/webhook', express.raw({ type: '*/*' }), paymentRoutes);
-app.use(express.json());
+
+// Security: explicit body size cap — rejects oversized JSON payloads
+// (e.g. a fake 10MB "password" field) before they ever reach route handlers.
+app.use(express.json({ limit: '100kb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
