@@ -5,7 +5,8 @@ const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
 const {
   getAllSellers, getAllBuyers, approveSeller, suspendSeller,
-  getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy
+  getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy,
+  getSellerSalesLast7Days
 } = require('./admin.controller');
 const {
   validateBulkUpload, importBulkUpload, downloadErrorReport
@@ -19,6 +20,7 @@ router.get('/sellers', getAllSellers);
 router.get('/buyers', getAllBuyers);
 router.patch('/sellers/:id/approve', approveSeller);
 router.patch('/sellers/:id/suspend', suspendSeller);
+router.get('/sellers/:id/sales-last-7-days', getSellerSalesLast7Days);
 router.get('/delivery-boys', getAllDeliveryBoys);
 router.patch('/delivery-boys/:id/approve', approveDeliveryBoy);
 router.patch('/delivery-boys/:id/suspend', suspendDeliveryBoy);

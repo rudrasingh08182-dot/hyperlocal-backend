@@ -64,6 +64,54 @@ exports.suspendSeller = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// GET /admin/sellers/:id/sales-last-7-days
+exports.getSellerSalesLast7Days = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const sellerCheck = await pool.query('SELECT shop_name FROM sellers WHERE id = $1::uuid', [id]);
+    if (!sellerCheck.rows[0]) return res.status(404).json({ error: 'Seller not found' });
+
+    // One row per day for the last 7 days (including today), even if a day had zero orders.
+    // Revenue excludes pending/cancelled orders — same rule used in seller.dashboard.js.
+    const result = await pool.query(
+      `SELECT
+         d::date as date,
+         COUNT(o.id) FILTER (WHERE o.id IS NOT NULL) as order_count,
+         COALESCE(SUM(CASE WHEN o.status NOT IN ('pending', 'cancelled') THEN o.total_amount ELSE 0 END), 0) as revenue
+       FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day') d
+       LEFT JOIN orders o ON DATE(o.created_at) = d::date AND o.seller_id = $1::uuid
+       GROUP BY d
+       ORDER BY d`,
+      [id]
+    );
+
+    const days = result.rows.map(r => ({
+      date: r.date,
+      order_count: parseInt(r.order_count),
+      revenue: parseFloat(r.revenue),
+      commission: parseFloat(r.revenue) * 0.10,
+    }));
+
+    const total_orders = days.reduce((sum, d) => sum + d.order_count, 0);
+    const total_revenue = days.reduce((sum, d) => sum + d.revenue, 0);
+    const total_commission = total_revenue * 0.10;
+
+    res.json({
+      seller_id: id,
+      shop_name: sellerCheck.rows[0].shop_name,
+      days,
+      total_orders,
+      total_revenue,
+      total_commission,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
 exports.getAllDeliveryBoys = async (req, res) => {
   try {
     const result = await pool.query(
