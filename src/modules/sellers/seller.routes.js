@@ -1,10 +1,14 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
 const { getSeller, registerShop, searchShops, getShopProducts, updateSeller } = require('./seller.controller');
 const { getDashboardStats, createProduct } = require('./seller.dashboard');
 const { saveBankDetails, getBankDetails } = require('./bank.controller'); // 
+const { uploadQrCode, deleteQrCode } = require('./sellerPaymentQr.controller');
+
+const qrUpload = multer({ storage: multer.memoryStorage() });
 
 router.get('/search', searchShops);
 router.get('/:shopId/products', getShopProducts);
@@ -16,6 +20,10 @@ router.get('/dashboard', auth, role('seller'), getDashboardStats);
 // ── Bank Details ─────────────────────────────────────────────
 router.post('/bank-details', auth, saveBankDetails);  // 👈 ADD THIS
 router.get('/bank-details', auth, getBankDetails);    // 👈 ADD THIS
+
+// ── Payment QR Code (temporary QR-based payment system) ───────
+router.post('/payment-qr', auth, role('seller'), qrUpload.single('qr'), uploadQrCode);
+router.delete('/payment-qr', auth, role('seller'), deleteQrCode);
 
 router.post('/fcm-token', auth, async (req, res) => {
   try {

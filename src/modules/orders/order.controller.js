@@ -65,54 +65,66 @@ exports.placeOrder = async (req, res) => {
 
     const grandTotal = parseFloat(total) + deliveryCharge;
 
+    // ── Initial order status ──
+    // COD / already-verified flows start at 'pending' (unchanged behavior).
+    // The temporary QR payment flow starts at 'pending_payment' — the order
+    // must NOT be treated as placed/confirmed until the buyer uploads proof
+    // and the seller approves it (see payments/paymentVerification.controller.js).
+    const initialStatus = payment_method === 'ONLINE_QR' ? 'pending_payment' : 'pending';
+
     // Create order
     const order = await pool.query(
       `INSERT INTO orders 
         (buyer_id, seller_id, status, payment_method, total_amount, 
          delivery_charge, distance_km, grand_total,
          delivery_address, delivery_phone, delivery_landmark)
-       VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9, $10)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [req.user.id, seller_id, payment_method, total,
+      [req.user.id, seller_id, initialStatus, payment_method, total,
        deliveryCharge, distanceKm, grandTotal,
        delivery_address, delivery_phone, delivery_landmark]
     );
 
     // Send WhatsApp notification to seller
-    try {
-      const { sendWhatsApp } = require('../../config/whatsapp');
-      const sellerInfo = await pool.query(
-        `SELECT u.phone, s.shop_name FROM sellers s 
-         JOIN users u ON s.user_id = u.id 
-         WHERE s.id = $1::uuid`,
-        [seller_id]
-      );
-      if (sellerInfo.rows[0]?.phone) {
-        await sendWhatsApp(
-          sellerInfo.rows[0].phone,
-          `🛒 New Order on Zaplo!\n\nShop: ${sellerInfo.rows[0].shop_name}\nOrder Amount: ₹${total}\nOrder ID: #${order.rows[0].id.slice(-6).toUpperCase()}\n\nLogin to your dashboard to accept the order.`
+    // Skipped for 'pending_payment' orders — the seller shouldn't be told
+    // "new order!" for a QR payment that hasn't even been attempted yet.
+    // They get notified separately once the buyer submits payment proof.
+    if (initialStatus !== 'pending_payment') {
+      try {
+        const { sendWhatsApp } = require('../../config/whatsapp');
+        const sellerInfo = await pool.query(
+          `SELECT u.phone, s.shop_name FROM sellers s 
+           JOIN users u ON s.user_id = u.id 
+           WHERE s.id = $1::uuid`,
+          [seller_id]
         );
+        if (sellerInfo.rows[0]?.phone) {
+          await sendWhatsApp(
+            sellerInfo.rows[0].phone,
+            `🛒 New Order on Zaplo!\n\nShop: ${sellerInfo.rows[0].shop_name}\nOrder Amount: ₹${total}\nOrder ID: #${order.rows[0].id.slice(-6).toUpperCase()}\n\nLogin to your dashboard to accept the order.`
+          );
+        }
+      } catch (waErr) {
+        console.error('WhatsApp notification error:', waErr.message);
       }
-    } catch (waErr) {
-      console.error('WhatsApp notification error:', waErr.message);
-    }
 
-    // Send FCM notification
-    try {
-      const { sendNotification } = require('../../config/firebase');
-      const sellerFcm = await pool.query(
-        `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
-        [seller_id]
-      );
-      if (sellerFcm.rows[0]?.fcm_token) {
-        await sendNotification(
-          sellerFcm.rows[0].fcm_token,
-          '🛒 New Order!',
-          `You have a new order of ₹${total}`
+      // Send FCM notification
+      try {
+        const { sendNotification } = require('../../config/firebase');
+        const sellerFcm = await pool.query(
+          `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
+          [seller_id]
         );
+        if (sellerFcm.rows[0]?.fcm_token) {
+          await sendNotification(
+            sellerFcm.rows[0].fcm_token,
+            '🛒 New Order!',
+            `You have a new order of ₹${total}`
+          );
+        }
+      } catch (fcmErr) {
+        console.error('FCM ERROR:', fcmErr.message);
       }
-    } catch (fcmErr) {
-      console.error('FCM ERROR:', fcmErr.message);
     }
 
     // ── Create order items & reduce stock (variant-aware) ──
