@@ -14,6 +14,7 @@ const uploadRoutes = require('./modules/uploads/upload.routes');
 const bankRoutes = require('./modules/sellers/bank.routes');
 const reviewRoutes = require('./modules/reviews/review.routes');
 const trackingRoutes = require('./modules/tracking/tracking.routes');
+const paymentVerificationRoutes = require('./modules/payments/paymentVerification.routes');
 
 const app = express();
 
@@ -44,6 +45,9 @@ app.use('/api/uploads', uploadRoutes);
 app.use('/api/sellers', bankRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/tracking', trackingRoutes);
+app.use('/api/payments/qr', paymentVerificationRoutes);
+
+// 404 handler
 
 // 404 handler
 app.use((req, res) => {
