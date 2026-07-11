@@ -85,46 +85,47 @@ exports.placeOrder = async (req, res) => {
        delivery_address, delivery_phone, delivery_landmark]
     );
 
-    // Send WhatsApp notification to seller
-    // Skipped for 'pending_payment' orders — the seller shouldn't be told
-    // "new order!" for a QR payment that hasn't even been attempted yet.
-    // They get notified separately once the buyer submits payment proof.
-    if (initialStatus !== 'pending_payment') {
-      try {
-        const { sendWhatsApp } = require('../../config/whatsapp');
-        const sellerInfo = await pool.query(
-          `SELECT u.phone, s.shop_name FROM sellers s 
-           JOIN users u ON s.user_id = u.id 
-           WHERE s.id = $1::uuid`,
-          [seller_id]
+    // Send WhatsApp notification to seller — sent for BOTH COD and Online (QR)
+    // orders. The message text tells the seller which case it is, so they know
+    // whether to expect Accept/Reject buttons or the blue "View Payment Details"
+    // button when they open the Orders tab.
+    try {
+      const { sendWhatsApp } = require('../../config/whatsapp');
+      const sellerInfo = await pool.query(
+        `SELECT u.phone, s.shop_name FROM sellers s 
+         JOIN users u ON s.user_id = u.id 
+         WHERE s.id = $1::uuid`,
+        [seller_id]
+      );
+      if (sellerInfo.rows[0]?.phone) {
+        const actionLine = initialStatus === 'pending_payment'
+          ? 'Buyer is paying via UPI QR — check your Orders tab once payment proof is submitted.'
+          : 'Login to your dashboard to accept the order.';
+        await sendWhatsApp(
+          sellerInfo.rows[0].phone,
+          `🛒 New Order on Zaplo!\n\nShop: ${sellerInfo.rows[0].shop_name}\nOrder Amount: ₹${total}\nOrder ID: #${order.rows[0].id.slice(-6).toUpperCase()}\nPayment: ${payment_method}\n\n${actionLine}`
         );
-        if (sellerInfo.rows[0]?.phone) {
-          await sendWhatsApp(
-            sellerInfo.rows[0].phone,
-            `🛒 New Order on Zaplo!\n\nShop: ${sellerInfo.rows[0].shop_name}\nOrder Amount: ₹${total}\nOrder ID: #${order.rows[0].id.slice(-6).toUpperCase()}\n\nLogin to your dashboard to accept the order.`
-          );
-        }
-      } catch (waErr) {
-        console.error('WhatsApp notification error:', waErr.message);
       }
+    } catch (waErr) {
+      console.error('WhatsApp notification error:', waErr.message);
+    }
 
-      // Send FCM notification
-      try {
-        const { sendNotification } = require('../../config/firebase');
-        const sellerFcm = await pool.query(
-          `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
-          [seller_id]
+    // Send FCM notification
+    try {
+      const { sendNotification } = require('../../config/firebase');
+      const sellerFcm = await pool.query(
+        `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
+        [seller_id]
+      );
+      if (sellerFcm.rows[0]?.fcm_token) {
+        await sendNotification(
+          sellerFcm.rows[0].fcm_token,
+          '🛒 New Order!',
+          `You have a new order of ₹${total}`
         );
-        if (sellerFcm.rows[0]?.fcm_token) {
-          await sendNotification(
-            sellerFcm.rows[0].fcm_token,
-            '🛒 New Order!',
-            `You have a new order of ₹${total}`
-          );
-        }
-      } catch (fcmErr) {
-        console.error('FCM ERROR:', fcmErr.message);
       }
+    } catch (fcmErr) {
+      console.error('FCM ERROR:', fcmErr.message);
     }
 
     // ── Create order items & reduce stock (variant-aware) ──
