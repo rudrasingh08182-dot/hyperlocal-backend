@@ -10,6 +10,7 @@ const {
   isValidUnitType,
   isValidReturnPolicy,
   stripExtensionLower,
+  parseImageFileNames,
   validateVariantGroup,
 } = require('./bulkUpload.util');
 
@@ -85,6 +86,7 @@ exports.validateBulkUpload = async (req, res) => {
 
     const valid = [];
     const invalid = [];
+    const rowWarnings = []; // { row, name, warnings: [...] } — non-blocking notices (e.g. an optional image missing)
     const seenNames = new Set();
     const matchedVariantProducts = new Set(); // tracks which variant groups got used
 
@@ -95,11 +97,12 @@ exports.validateBulkUpload = async (req, res) => {
       const category = String(row['Category'] || '').toLowerCase().trim();
       const stockRaw = row['Stock Quantity'];
       const unitType = String(row['Sold By'] || '').toLowerCase().trim();
-      const imageFileName = String(row['Image File Name'] || '').trim();
+      const imageFileNameRaw = String(row['Image File Name'] || '').trim();
       const description = String(row['Description'] || '').trim();
       const returnPolicy = String(row['Return Policy'] || '').toUpperCase().trim();
 
       const errors = [];
+      const warnings = [];
 
       if (!name) errors.push('Product Name is missing');
       if (seenNames.has(name.toLowerCase())) errors.push('Duplicate product name in this file');
@@ -130,10 +133,33 @@ exports.validateBulkUpload = async (req, res) => {
       if (!isValidCategory(category)) errors.push(`Invalid category "${row['Category']}"`);
       if (!isValidUnitType(unitType)) errors.push(`Invalid "Sold By" value "${row['Sold By']}"`);
 
-      if (!imageFileName) errors.push('Image File Name is missing');
-      const imageKey = stripExtensionLower(imageFileName);
-      const imageBuffer = imageFileName ? imageMap.get(imageKey) : null;
-      if (imageFileName && !imageBuffer) errors.push(`No matching image found in ZIP for "${imageFileName}"`);
+      // ── Images: comma-separated in one cell. First image is mandatory, up to 4 more are optional. ──
+      const imageFileNames = parseImageFileNames(imageFileNameRaw);
+      const imageKeys = [];
+
+      if (imageFileNames.length === 0) {
+        errors.push('Image File Name is missing (at least 1 image is required)');
+      } else {
+        // First image — mandatory
+        const firstKey = stripExtensionLower(imageFileNames[0]);
+        const firstBuffer = imageMap.get(firstKey);
+        if (!firstBuffer) {
+          errors.push(`No matching image found in ZIP for "${imageFileNames[0]}"`);
+        } else {
+          imageKeys.push(firstKey);
+        }
+
+        // Remaining images — optional. A missing one is a warning, not a blocking error.
+        for (let i = 1; i < imageFileNames.length; i++) {
+          const key = stripExtensionLower(imageFileNames[i]);
+          const buffer = imageMap.get(key);
+          if (buffer) {
+            imageKeys.push(key);
+          } else {
+            warnings.push(`Optional image "${imageFileNames[i]}" not found in ZIP — skipped`);
+          }
+        }
+      }
 
       if (!description) errors.push('Description is missing');
 
@@ -162,6 +188,10 @@ exports.validateBulkUpload = async (req, res) => {
         stock = variants.reduce((sum, v) => sum + Number(v.stock), 0);
       }
 
+      if (warnings.length > 0) {
+        rowWarnings.push({ row: rowNum, name, warnings });
+      }
+
       valid.push({
         row: rowNum,
         name,
@@ -171,7 +201,8 @@ exports.validateBulkUpload = async (req, res) => {
         unit_type: unitType,
         description,
         return_policy: returnPolicy,
-        imageKey,
+        imageKeys, // array of matched ZIP keys — 1 to 5 images
+        warnings,
         variants, // null for simple products, array for variant products
       });
     });
@@ -209,6 +240,7 @@ exports.validateBulkUpload = async (req, res) => {
       preview: valid.slice(0, 50),
       invalid,
       orphanVariantErrors,
+      rowWarnings,
     });
   } catch (err) {
     console.error('Bulk validate error:', err);
@@ -238,10 +270,15 @@ exports.importBulkUpload = async (req, res) => {
       try {
         await client.query('BEGIN');
 
-        const imageBuffer = imageMap.get(p.imageKey);
-        const imageUrl = imageBuffer
-          ? await uploadBufferToCloudinary(imageBuffer)
-          : 'https://via.placeholder.com/300';
+        // Upload every matched image (1 to 5) for this product to Cloudinary, in order.
+        const imageUrls = [];
+        for (const key of p.imageKeys) {
+          const buffer = imageMap.get(key);
+          if (!buffer) continue;
+          const url = await uploadBufferToCloudinary(buffer);
+          imageUrls.push(url);
+        }
+        if (imageUrls.length === 0) imageUrls.push('https://via.placeholder.com/300');
 
         const hasVariants = Array.isArray(p.variants) && p.variants.length > 0;
 
@@ -250,7 +287,7 @@ exports.importBulkUpload = async (req, res) => {
            (seller_id, name, description, price, stock, category, image_urls, return_policy, is_available, unit_type, has_variants)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            RETURNING id`,
-          [sellerId, p.name, p.description, p.price, p.stock, p.category, [imageUrl], p.return_policy, p.stock > 0, p.unit_type, hasVariants]
+          [sellerId, p.name, p.description, p.price, p.stock, p.category, imageUrls, p.return_policy, p.stock > 0, p.unit_type, hasVariants]
         );
 
         const productId = productResult.rows[0].id;
