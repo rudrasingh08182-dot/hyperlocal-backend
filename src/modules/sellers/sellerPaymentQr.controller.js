@@ -28,16 +28,34 @@ exports.uploadQrCode = async (req, res) => {
 
     const qrUrl = await uploadBufferToCloudinary(req.file.buffer);
 
-    // seller_bank_details may not have a row yet for this seller — upsert safely
-    const result = await pool.query(
-      `INSERT INTO seller_bank_details (seller_id, qr_code_url)
-       VALUES ($1, $2)
-       ON CONFLICT (seller_id) DO UPDATE SET qr_code_url = $2, updated_at = NOW()
-       RETURNING qr_code_url, upi_id`,
-      [sellerId, qrUrl]
-    );
+    // seller_bank_details may not have a row yet for this seller (e.g. they're
+    // uploading the QR before ever filling Bank Details). account_holder_name,
+    // bank_name, account_number, ifsc_code are NOT NULL on that table (needed
+    // later for Razorpay payouts), so we can't insert a bare row with just the
+    // QR — fill safe empty-string placeholders instead. When the seller later
+    // fills and saves real Bank Details, bank.controller.js's own upsert
+    // overwrites these placeholders with the real values.
+    const existing = await pool.query('SELECT seller_id FROM seller_bank_details WHERE seller_id = $1', [sellerId]);
 
-    res.json({ message: 'QR code uploaded', qr_code_url: result.rows[0].qr_code_url });
+    let qrCodeUrlResult;
+    if (existing.rows.length > 0) {
+      const updateResult = await pool.query(
+        `UPDATE seller_bank_details SET qr_code_url = $1, updated_at = NOW() WHERE seller_id = $2 RETURNING qr_code_url`,
+        [qrUrl, sellerId]
+      );
+      qrCodeUrlResult = updateResult.rows[0].qr_code_url;
+    } else {
+      const insertResult = await pool.query(
+        `INSERT INTO seller_bank_details
+         (seller_id, account_holder_name, account_number, ifsc_code, bank_name, account_type, qr_code_url)
+         VALUES ($1, '', '', '', '', 'savings', $2)
+         RETURNING qr_code_url`,
+        [sellerId, qrUrl]
+      );
+      qrCodeUrlResult = insertResult.rows[0].qr_code_url;
+    }
+
+    res.json({ message: 'QR code uploaded', qr_code_url: qrCodeUrlResult });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
