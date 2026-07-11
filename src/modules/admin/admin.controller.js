@@ -79,7 +79,7 @@ exports.getSellerSalesLast7Days = async (req, res) => {
       `SELECT
          d::date as date,
          COUNT(o.id) FILTER (WHERE o.id IS NOT NULL) as order_count,
-         COALESCE(SUM(CASE WHEN o.status NOT IN ('pending', 'cancelled') THEN o.total_amount ELSE 0 END), 0) as revenue
+         COALESCE(SUM(CASE WHEN o.status NOT IN ('pending', 'cancelled', 'pending_payment', 'payment_verification_pending', 'payment_rejected') THEN o.total_amount ELSE 0 END), 0) as revenue
        FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day') d
        LEFT JOIN orders o ON DATE(o.created_at) = d::date AND o.seller_id = $1::uuid
        GROUP BY d

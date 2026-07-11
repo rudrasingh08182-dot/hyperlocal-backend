@@ -13,15 +13,15 @@ exports.getDashboardStats = async (req, res) => {
     const [salesStats, ledgerStats, recentOrders, topProducts, ordersByDay] = await Promise.all([
 
       // Total sales stats
-      pool.query(`
+     pool.query(`
   SELECT
     COUNT(*) as total_orders,
     COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_orders,
     COUNT(CASE WHEN status = 'delivered' THEN 1 END) as delivered_orders,
     COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_orders,
-    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled') THEN total_amount ELSE 0 END), 0) as gross_sales,
-    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled') AND DATE(created_at) = CURRENT_DATE THEN total_amount ELSE 0 END), 0) as today_sales,
-    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled') AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', NOW()) THEN total_amount ELSE 0 END), 0) as monthly_sales
+    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled', 'pending_payment', 'payment_verification_pending', 'payment_rejected') THEN total_amount ELSE 0 END), 0) as gross_sales,
+    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled', 'pending_payment', 'payment_verification_pending', 'payment_rejected') AND DATE(created_at) = CURRENT_DATE THEN total_amount ELSE 0 END), 0) as today_sales,
+    COALESCE(SUM(CASE WHEN status NOT IN ('pending', 'cancelled', 'pending_payment', 'payment_verification_pending', 'payment_rejected') AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', NOW()) THEN total_amount ELSE 0 END), 0) as monthly_sales
   FROM orders WHERE seller_id = $1
 `, [sellerId]),
       // Ledger balance
@@ -60,14 +60,14 @@ exports.getDashboardStats = async (req, res) => {
                COALESCE(SUM(oi.quantity * oi.unit_price), 0) as total_revenue
         FROM products p
         LEFT JOIN order_items oi ON oi.product_id = p.id
-        LEFT JOIN orders o ON oi.order_id = o.id AND o.status NOT IN ('cancelled', 'pending')
+        LEFT JOIN orders o ON oi.order_id = o.id AND o.status NOT IN ('cancelled', 'pending', 'pending_payment', 'payment_verification_pending', 'payment_rejected')
         WHERE p.seller_id = $1
         GROUP BY p.id
         ORDER BY total_sold DESC LIMIT 5
       `, [sellerId]),
 
       // Sales by day (last 7 days)
-      pool.query(`
+     pool.query(`
         SELECT
           TO_CHAR(DATE_TRUNC('day', created_at), 'Dy') as day,
           COALESCE(SUM(total_amount), 0) as sales,
@@ -75,7 +75,7 @@ exports.getDashboardStats = async (req, res) => {
         FROM orders
         WHERE seller_id = $1
         AND created_at >= NOW() - INTERVAL '7 days'
-       AND status NOT IN ('cancelled', 'pending')
+       AND status NOT IN ('cancelled', 'pending', 'pending_payment', 'payment_verification_pending', 'payment_rejected')
         GROUP BY DATE_TRUNC('day', created_at)
         ORDER BY DATE_TRUNC('day', created_at)
       `, [sellerId]),
