@@ -29,7 +29,7 @@ exports.getPaymentDetailsForOrder = async (req, res) => {
     const { orderId } = req.params;
 
     const result = await pool.query(
-      `SELECT o.id as order_id, o.grand_total, o.total_amount, o.status,
+      `SELECT o.id as order_id, o.total_amount, o.status,
               s.shop_name, s.id as seller_id,
               bd.upi_id, bd.qr_code_url
        FROM orders o
@@ -46,10 +46,13 @@ exports.getPaymentDetailsForOrder = async (req, res) => {
       return res.status(400).json({ error: 'This seller has not set up UPI payment details yet. Please choose Cash on Delivery.' });
     }
 
+    // Delivery charge (₹20 + distance-based extra) is paid by the buyer directly
+    // to the delivery partner in cash — it never goes through the seller's UPI.
+    // So the QR payment amount is total_amount only, NOT grand_total.
     res.json({
       order_id: row.order_id,
       status: row.status,
-      amount: row.grand_total || row.total_amount,
+      amount: row.total_amount,
       shop_name: row.shop_name,
       upi_id: row.upi_id,
       qr_code_url: row.qr_code_url,
