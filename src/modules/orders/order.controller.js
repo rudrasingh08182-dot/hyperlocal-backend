@@ -1,4 +1,5 @@
 const { calculateDeliveryCharge, calculateDistance } = require('../../utils/deliveryCharge');
+const { getDrivingDistanceKm } = require('../../utils/osrmDistance');
  
 const pool = require('../../config/db');
 exports.placeOrder = async (req, res) => {
@@ -51,18 +52,26 @@ exports.placeOrder = async (req, res) => {
     );
     const seller = sellerResult.rows[0];
 
-    // Calculate delivery charge
+   // Calculate delivery charge
     let distanceKm = null;
     let deliveryCharge = 20;
 
     if (buyer_lat && buyer_lng && seller?.latitude && seller?.longitude) {
-      distanceKm = calculateDistance(
-        parseFloat(buyer_lat), parseFloat(buyer_lng),
-        parseFloat(seller.latitude), parseFloat(seller.longitude)
+      // Real road distance via free OSRM routing — falls back to the old
+      // straight-line Haversine calc if OSRM is slow/down, so order
+      // placement never breaks because of this.
+      distanceKm = await getDrivingDistanceKm(
+        parseFloat(seller.latitude), parseFloat(seller.longitude),
+        parseFloat(buyer_lat), parseFloat(buyer_lng)
       );
+      if (distanceKm === null) {
+        distanceKm = calculateDistance(
+          parseFloat(buyer_lat), parseFloat(buyer_lng),
+          parseFloat(seller.latitude), parseFloat(seller.longitude)
+        );
+      }
       deliveryCharge = calculateDeliveryCharge(distanceKm);
     }
-
     const grandTotal = parseFloat(total) + deliveryCharge;
 
     // ── Initial order status ──
@@ -72,17 +81,19 @@ exports.placeOrder = async (req, res) => {
     // and the seller approves it (see payments/paymentVerification.controller.js).
     const initialStatus = payment_method === 'ONLINE_QR' ? 'pending_payment' : 'pending';
 
-    // Create order
+   // Create order
     const order = await pool.query(
       `INSERT INTO orders 
         (buyer_id, seller_id, status, payment_method, total_amount, 
          delivery_charge, distance_km, grand_total,
-         delivery_address, delivery_phone, delivery_landmark)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         delivery_address, delivery_phone, delivery_landmark,
+         delivery_lat, delivery_lng)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
       [req.user.id, seller_id, initialStatus, payment_method, total,
        deliveryCharge, distanceKm, grandTotal,
-       delivery_address, delivery_phone, delivery_landmark]
+       delivery_address, delivery_phone, delivery_landmark,
+       buyer_lat || null, buyer_lng || null]
     );
 
     // Send WhatsApp notification to seller — sent for BOTH COD and Online (QR)
@@ -283,9 +294,11 @@ exports.getMyDeliveries = async (req, res) => {
     const result = await pool.query(
       `SELECT o.id, o.total_amount, o.payment_method, o.status,
               o.delivery_address, o.delivery_phone, o.delivery_landmark,
+              o.delivery_lat, o.delivery_lng,
               o.created_at,
               s.shop_name, s.address as seller_address,
               s.contact_phone as seller_phone, s.locality as seller_locality,
+              s.latitude as seller_lat, s.longitude as seller_lng,
               u.name as buyer_name
        FROM orders o
        JOIN sellers s ON o.seller_id = s.id
