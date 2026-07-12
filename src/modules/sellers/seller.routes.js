@@ -73,6 +73,28 @@ router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
       `UPDATE orders SET status = 'confirmed' WHERE id = $1::uuid RETURNING *`,
       [req.params.id]
     );
+
+    if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
+
+    // Notify every approved delivery boy that a new order is ready for pickup —
+    // best-effort, never blocks the response.
+    try {
+      const { sendWhatsApp } = require('../../config/whatsapp');
+      const order = result.rows[0];
+      const deliveryBoys = await pool.query(
+        `SELECT u.phone FROM delivery_boys d JOIN users u ON d.user_id = u.id WHERE d.status = 'approved'`
+      );
+      for (const db of deliveryBoys.rows) {
+        if (!db.phone) continue;
+        await sendWhatsApp(
+          db.phone,
+          `🚴 New Order Ready for Pickup!\n\nOrder ID: #${order.id.slice(-6).toUpperCase()}\nAmount: ₹${order.total_amount}\n\nOpen the Zaplo Delivery app → Available Orders to accept it.`
+        );
+      }
+    } catch (waErr) {
+      console.error('WhatsApp notification error (delivery boys):', waErr.message);
+    }
+
     res.json({ message: 'Order confirmed!', order: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: err.message });

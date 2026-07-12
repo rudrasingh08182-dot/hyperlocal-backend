@@ -189,12 +189,12 @@ exports.approvePayment = async (req, res) => {
     }
     const v = verification.rows[0];
 
-    await client.query(
+   await client.query(
       `UPDATE payment_verifications SET status = 'approved', approved_at = NOW() WHERE id = $1::uuid`,
       [verificationId]
     );
-    await client.query(
-      `UPDATE orders SET status = 'confirmed' WHERE id = $1::uuid`,
+    const orderResult = await client.query(
+      `UPDATE orders SET status = 'confirmed' WHERE id = $1::uuid RETURNING id, total_amount`,
       [v.order_id]
     );
 
@@ -213,6 +213,25 @@ exports.approvePayment = async (req, res) => {
       }
     } catch (fcmErr) {
       console.error('FCM ERROR (approve payment):', fcmErr.message);
+    }
+
+    // Notify every approved delivery boy that a new order is ready for pickup —
+    // best-effort, never blocks the response. Same as the COD accept-order flow.
+    try {
+      const { sendWhatsApp } = require('../../config/whatsapp');
+      const order = orderResult.rows[0];
+      const deliveryBoys = await pool.query(
+        `SELECT u.phone FROM delivery_boys d JOIN users u ON d.user_id = u.id WHERE d.status = 'approved'`
+      );
+      for (const db of deliveryBoys.rows) {
+        if (!db.phone) continue;
+        await sendWhatsApp(
+          db.phone,
+          `🚴 New Order Ready for Pickup!\n\nOrder ID: #${order.id.slice(-6).toUpperCase()}\nAmount: ₹${order.total_amount}\n\nOpen the Zaplo Delivery app → Available Orders to accept it.`
+        );
+      }
+    } catch (waErr) {
+      console.error('WhatsApp notification error (delivery boys):', waErr.message);
     }
 
     res.json({ message: 'Payment approved, order confirmed!' });
