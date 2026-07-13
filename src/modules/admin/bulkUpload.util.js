@@ -5,7 +5,11 @@
 
 const VALID_CATEGORIES = ['grocery', 'fresh', 'electronics', 'fashion', 'food', 'stationery', 'medical'];
 
-const VALID_UNIT_TYPES = ['piece', 'kg', 'gram', 'litre', 'ml', 'dozen', 'packet', 'box', 'bundle'];
+const VALID_UNIT_TYPES = [
+  'piece', 'kg', 'gram', 'quintal', 'litre', 'ml', 'dozen', 'packet', 'box', 'bundle',
+  'plate', 'bowl', 'cup', 'tray', 'pair', 'set', 'roll', 'sheet',
+  'bottle', 'jar', 'can', 'sachet', 'strip', 'meter',
+];
 
 const VALID_RETURN_POLICIES = [
   'PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS',
