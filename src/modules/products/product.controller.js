@@ -72,12 +72,46 @@ exports.addProduct = async (req, res) => {
 exports.updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, category, stock, image_url, is_available } = req.body;
-    const result = await pool.query(
-      `UPDATE products SET name=$1, description=$2, price=$3, category=$4,
-       stock=$5, image_url=$6, is_available=$7 WHERE id=$8::uuid RETURNING *`,
-      [name, description, price, category, stock, image_url, is_available, id]
+
+    // Ownership check — a seller can only edit their own products
+    const ownerCheck = await pool.query(
+      `SELECT p.id FROM products p JOIN sellers s ON p.seller_id = s.id WHERE p.id = $1::uuid AND s.user_id = $2`,
+      [id, req.user.id]
     );
+    if (!ownerCheck.rows[0]) return res.status(403).json({ error: 'You do not have permission to edit this product' });
+
+    const {
+      name, description, price, category, stock, image_urls,
+      return_policy, unit_type, unit_weight, price_per_kg, sku,
+    } = req.body;
+
+    // COALESCE pattern — any field NOT sent in the request keeps its existing
+    // value, instead of accidentally being wiped to null.
+    const result = await pool.query(
+      `UPDATE products SET
+        name = COALESCE($1, name),
+        description = COALESCE($2, description),
+        price = COALESCE($3, price),
+        category = COALESCE($4, category),
+        stock = COALESCE($5, stock),
+        image_urls = COALESCE($6, image_urls),
+        return_policy = COALESCE($7, return_policy),
+        unit_type = COALESCE($8, unit_type),
+        unit_weight = COALESCE($9, unit_weight),
+        price_per_kg = COALESCE($10, price_per_kg),
+        sku = COALESCE($11, sku),
+        is_available = CASE WHEN $5::int IS NOT NULL THEN $5::int > 0 ELSE is_available END
+       WHERE id = $12::uuid
+       RETURNING *`,
+      [
+        name || null, description || null, price || null, category || null,
+        stock !== undefined ? parseInt(stock) : null,
+        image_urls || null, return_policy || null, unit_type || null,
+        unit_weight || null, price_per_kg || null, sku || null,
+        id,
+      ]
+    );
+
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
