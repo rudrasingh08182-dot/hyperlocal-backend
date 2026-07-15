@@ -11,8 +11,12 @@ const {
 const {
   validateBulkUpload, importBulkUpload, downloadErrorReport
 } = require('./bulkUpload.controller');
+const {
+  getAllBanners, createBanner, updateBanner, deleteBanner, reorderBanners
+} = require('../banners/banner.controller');
 
 const upload = multer({ storage: multer.memoryStorage() });
+const bannerUpload = multer({ storage: multer.memoryStorage() });
 
 router.use(auth, role('admin'));
 
@@ -24,6 +28,13 @@ router.get('/sellers/:id/sales-last-7-days', getSellerSalesLast7Days);
 router.get('/delivery-boys', getAllDeliveryBoys);
 router.patch('/delivery-boys/:id/approve', approveDeliveryBoy);
 router.patch('/delivery-boys/:id/suspend', suspendDeliveryBoy);
+
+// ── Hero Banner Carousel management ──────────────────────────
+router.get('/banners', getAllBanners);
+router.post('/banners', bannerUpload.single('image'), createBanner);
+router.patch('/banners/reorder', reorderBanners); // must be BEFORE /banners/:id to avoid route collision
+router.patch('/banners/:id', bannerUpload.single('image'), updateBanner);
+router.delete('/banners/:id', deleteBanner);
 
 // Bulk product upload
 router.post(
