@@ -3,7 +3,7 @@
 // All product fields now come directly from the Excel file (no auto-detection) —
 // this file just validates values against the same allowed lists used elsewhere in Zaplo.
 
-const VALID_CATEGORIES = ['grocery', 'fresh', 'electronics', 'fashion', 'food', 'stationery', 'medical'];
+const VALID_CATEGORIES = ['grocery', 'fresh', 'electronics', 'fashion', 'food', 'stationery', 'medical', 'sweets'];
 
 const VALID_UNIT_TYPES = [
   'piece', 'kg', 'gram', 'quintal', 'litre', 'ml', 'dozen', 'packet', 'box', 'bundle',
