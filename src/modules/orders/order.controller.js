@@ -14,6 +14,15 @@ exports.placeOrder = async (req, res) => {
       return res.status(400).json({ error: 'No items in order' });
     }
 
+    // ── Store availability check ──
+    // A seller who has switched to "Temporarily Closed" must not receive
+    // new orders, even if the buyer's app was showing stale product data.
+    const sellerOnlineCheck = await pool.query('SELECT is_online FROM sellers WHERE id = $1::uuid', [seller_id]);
+    if (!sellerOnlineCheck.rows[0]) return res.status(404).json({ error: 'Seller not found' });
+    if (sellerOnlineCheck.rows[0].is_online === false) {
+      return res.status(400).json({ error: 'This store is temporarily unavailable. Please try again later.' });
+    }
+
     // ── Calculate items total (variant-aware) ──
     let total = 0;
     // itemDetails caches what we looked up, so we don't re-query in the insert loop below
@@ -224,6 +233,13 @@ exports.getAvailableOrders = async (req, res) => {
   try {
     const { lat, lng } = req.query;
 
+    // If this delivery partner has switched themselves Offline, they should
+    // not see (or be able to accept) any new available orders.
+    const selfCheck = await pool.query('SELECT is_online FROM delivery_boys WHERE user_id = $1', [req.user.id]);
+    if (selfCheck.rows[0] && selfCheck.rows[0].is_online === false) {
+      return res.json([]);
+    }
+
     const result = await pool.query(
       `SELECT o.id, o.total_amount, o.payment_method, o.delivery_address,
               o.delivery_phone, o.delivery_landmark, o.created_at,
@@ -267,6 +283,13 @@ exports.getAvailableOrders = async (req, res) => {
 exports.acceptDelivery = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Defense in depth — even if a stale "Available Orders" list is showing
+    // on the client, block accepting once this partner has gone Offline.
+    const selfCheck = await pool.query('SELECT is_online FROM delivery_boys WHERE user_id = $1', [req.user.id]);
+    if (selfCheck.rows[0] && selfCheck.rows[0].is_online === false) {
+      return res.status(400).json({ error: 'You are currently Offline. Go Online to accept new deliveries.' });
+    }
 
     const result = await pool.query(
       `UPDATE orders SET 
@@ -355,6 +378,41 @@ exports.updateLocation = async (req, res) => {
     );
 
     res.json({ message: 'Location updated' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PATCH /orders/toggle-availability — delivery partner Online/Offline toggle.
+// Going offline just stops NEW deliveries from being shown/assignable —
+// it never touches an already-accepted active delivery, so the partner can
+// always finish a delivery already in progress before going fully offline.
+exports.toggleDeliveryAvailability = async (req, res) => {
+  try {
+    const { is_online } = req.body;
+    if (typeof is_online !== 'boolean') {
+      return res.status(400).json({ error: 'is_online must be true or false' });
+    }
+
+    const result = await pool.query(
+      `UPDATE delivery_boys SET is_online = $1 WHERE user_id = $2 RETURNING is_online`,
+      [is_online, req.user.id]
+    );
+
+    if (!result.rows[0]) return res.status(404).json({ error: 'Delivery profile not found' });
+    res.json({ message: is_online ? 'You are now Online' : 'You are now Offline', is_online: result.rows[0].is_online });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+
+// GET /orders/my-availability — lets DeliveryDashboard know the current
+// toggle state on page load/refresh (no dedicated self-profile endpoint existed).
+exports.getMyAvailability = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT is_online FROM delivery_boys WHERE user_id = $1', [req.user.id]);
+    res.json({ is_online: result.rows[0]?.is_online ?? true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
-const { getSeller, registerShop, searchShops, getShopProducts, updateSeller } = require('./seller.controller');
+const { getSeller, registerShop, searchShops, getShopProducts, updateSeller, toggleStoreStatus } = require('./seller.controller');
 const { getDashboardStats, createProduct } = require('./seller.dashboard');
 const { saveBankDetails, getBankDetails } = require('./bank.controller'); // 
 const { uploadQrCode, deleteQrCode } = require('./sellerPaymentQr.controller');
@@ -14,6 +14,7 @@ router.get('/search', searchShops);
 router.get('/:shopId/products', getShopProducts);
 router.get('/me', auth, getSeller);
 router.patch('/me', auth, updateSeller);
+router.patch('/store-status', auth, role('seller'), toggleStoreStatus);
 router.post('/register', auth, registerShop);
 router.get('/dashboard', auth, role('seller'), getDashboardStats);
 

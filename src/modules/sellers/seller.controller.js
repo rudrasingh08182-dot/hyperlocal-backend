@@ -29,7 +29,7 @@ exports.searchShops = async (req, res) => {
   try {
     const { q } = req.query;
     const result = await pool.query(
-      `SELECT s.id, s.shop_name, s.address, s.locality, s.contact_phone, s.status,
+      `SELECT s.id, s.shop_name, s.address, s.locality, s.contact_phone, s.status, s.is_online,
               u.name as owner_name,
               COUNT(p.id) as total_products
        FROM sellers s
@@ -46,12 +46,11 @@ exports.searchShops = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.getShopProducts = async (req, res) => {
   try {
     const { shopId } = req.params;
     const result = await pool.query(
-      `SELECT p.*, s.shop_name, s.locality
+      `SELECT p.*, s.shop_name, s.locality, s.is_online as seller_is_online
        FROM products p
        JOIN sellers s ON p.seller_id = s.id
        WHERE p.seller_id = $1 AND p.is_available = true AND p.stock > 0
@@ -63,7 +62,6 @@ exports.getShopProducts = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
 exports.updateSeller = async (req, res) => {
   try {
     const { latitude, longitude, shop_name, address, locality, contact_phone } = req.body;
@@ -81,6 +79,26 @@ exports.updateSeller = async (req, res) => {
     );
 
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PATCH /sellers/store-status — toggle "Online" / "Temporarily Closed"
+exports.toggleStoreStatus = async (req, res) => {
+  try {
+    const { is_online } = req.body;
+    if (typeof is_online !== 'boolean') {
+      return res.status(400).json({ error: 'is_online must be true or false' });
+    }
+
+    const result = await pool.query(
+      `UPDATE sellers SET is_online = $1 WHERE user_id = $2 RETURNING is_online`,
+      [is_online, req.user.id]
+    );
+
+    if (!result.rows[0]) return res.status(404).json({ error: 'Seller profile not found' });
+    res.json({ message: is_online ? 'Store is now Online' : 'Store is now Temporarily Closed', is_online: result.rows[0].is_online });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
