@@ -6,7 +6,8 @@ const role = require('../../middleware/role.middleware');
 const {
   getAllSellers, getAllBuyers, approveSeller, suspendSeller,
   getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy,
-  getSellerSalesLast7Days
+  getSellerSalesLast7Days,
+  getServiceablePincodes, addServiceablePincode, removeServiceablePincode, getWaitingPincodes
 } = require('./admin.controller');
 const {
   validateBulkUpload, importBulkUpload, downloadErrorReport
@@ -28,6 +29,12 @@ router.get('/sellers/:id/sales-last-7-days', getSellerSalesLast7Days);
 router.get('/delivery-boys', getAllDeliveryBoys);
 router.patch('/delivery-boys/:id/approve', approveDeliveryBoy);
 router.patch('/delivery-boys/:id/suspend', suspendDeliveryBoy);
+
+// ── Pincode Management ──────────────────────────────
+router.get('/pincodes', getServiceablePincodes);
+router.post('/pincodes', addServiceablePincode);
+router.delete('/pincodes/:pincode', removeServiceablePincode);
+router.get('/waiting-pincodes', getWaitingPincodes);
 
 // ── Hero Banner Carousel management ──────────────────────────
 router.get('/banners', getAllBanners);
