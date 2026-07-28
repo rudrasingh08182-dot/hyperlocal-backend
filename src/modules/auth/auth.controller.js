@@ -2,13 +2,13 @@ const { registerUser, loginUser } = require('./auth.service');
 
 const register = async (req, res) => {
   try {
-    const { username, name, phone, password, role } = req.body;
+    const { username, name, phone, password, role, address, pincode } = req.body;
 
-    if (!username || !name || !phone || !password) {
-      return res.status(400).json({ error: 'All fields are required' });
+    if (!username || !name || !phone || !password || !address || !pincode) {
+      return res.status(400).json({ error: 'Username, name, phone, password, address, and pincode are required' });
     }
 
-    const user = await registerUser({ username, name, phone, password, role });
+    const user = await registerUser({ username, name, phone, password, role, address, pincode });
     res.status(201).json({ message: 'User registered successfully', user });
   } catch (err) {
     res.status(400).json({ error: err.message });
