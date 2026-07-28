@@ -2,7 +2,36 @@ const pool = require('../../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-const registerUser = async ({ username, name, phone, password, role }) => {
+// Helper to check pincode against serviceable_pincodes and log unserviceable requests to waiting_pincodes
+const checkAndLogPincode = async (pincode) => {
+  if (!pincode) return false;
+  const cleanPincode = pincode.trim();
+
+  // 1. Check if pincode exists in serviceable_pincodes
+  const checkRes = await pool.query(
+    'SELECT pincode FROM serviceable_pincodes WHERE pincode = $1',
+    [cleanPincode]
+  );
+  
+  const isServiceable = checkRes.rows.length > 0;
+
+  // 2. If NOT serviceable, log to waiting_pincodes
+  if (!isServiceable) {
+    await pool.query(
+      `INSERT INTO waiting_pincodes (pincode, request_count, last_requested_at)
+       VALUES ($1, 1, CURRENT_TIMESTAMP)
+       ON CONFLICT (pincode) 
+       DO UPDATE SET 
+         request_count = waiting_pincodes.request_count + 1,
+         last_requested_at = CURRENT_TIMESTAMP`,
+      [cleanPincode]
+    );
+  }
+
+  return isServiceable;
+};
+
+const registerUser = async ({ username, name, phone, password, role, address, pincode }) => {
   // ── Security: hard cap BEFORE bcrypt hashing ──
   if (typeof password !== 'string' || password.length > 128) {
     throw new Error('Password must be between 8 and 128 characters.');
@@ -12,6 +41,12 @@ const registerUser = async ({ username, name, phone, password, role }) => {
   }
   if (typeof username !== 'string' || username.length > 50) {
     throw new Error('Username too long');
+  }
+  if (!pincode || typeof pincode !== 'string') {
+    throw new Error('Pincode is required');
+  }
+  if (!address || typeof address !== 'string') {
+    throw new Error('Address is required');
   }
 
   const existing = await pool.query(
@@ -23,16 +58,29 @@ const registerUser = async ({ username, name, phone, password, role }) => {
     throw new Error('Username or phone already exists');
   }
 
+  const isServiceable = await checkAndLogPincode(pincode);
   const password_hash = await bcrypt.hash(password, 10);
 
   const result = await pool.query(
-    `INSERT INTO users (username, name, phone, password_hash, role)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, username, name, phone, role, created_at`,
-    [username, name, phone, password_hash, role || 'buyer']
+    `INSERT INTO users (username, name, phone, password_hash, role, address, pincode, serviceable)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, username, name, phone, role, pincode, serviceable, created_at`,
+    [username, name, phone, password_hash, role || 'buyer', address, pincode.trim(), isServiceable]
   );
 
-  return result.rows[0];
+  const user = result.rows[0];
+
+  // If role is seller, create seller profile with pincode
+  if (role === 'seller') {
+    await pool.query(
+      `INSERT INTO sellers (user_id, shop_name, address, locality, pincode, status)
+       VALUES ($1, $2, $3, $4, $5, 'pending')
+       ON CONFLICT DO NOTHING`,
+      [user.id, `${name}'s Shop`, address, address, pincode.trim()]
+    );
+  }
+
+  return user;
 };
 
 const loginUser = async ({ phone, password }) => {
@@ -80,26 +128,37 @@ const loginUser = async ({ phone, password }) => {
     }
   }
   // Check if delivery boy is approved
-if (user.role === 'delivery') {
-  const deliveryResult = await pool.query(
-    'SELECT status FROM delivery_boys WHERE user_id = $1',
-    [user.id]
-  );
+  if (user.role === 'delivery') {
+    const deliveryResult = await pool.query(
+      'SELECT status FROM delivery_boys WHERE user_id = $1',
+      [user.id]
+    );
 
-  if (deliveryResult.rows.length === 0) {
-    throw new Error('Delivery profile not found. Please contact admin.');
+    if (deliveryResult.rows.length === 0) {
+      throw new Error('Delivery profile not found. Please contact admin.');
+    }
+
+    if (deliveryResult.rows[0].status === 'pending') {
+      throw new Error('Your account is pending approval from admin.');
+    }
+
+    if (deliveryResult.rows[0].status === 'suspended') {
+      throw new Error('Your account has been suspended.');
+    }
   }
 
-  if (deliveryResult.rows[0].status === 'pending') {
-    throw new Error('Your account is pending approval from admin.');
+  // Double-check serviceability from serviceable_pincodes table
+  let serviceable = user.serviceable;
+  if (user.pincode) {
+    const pCheck = await pool.query(
+      'SELECT pincode FROM serviceable_pincodes WHERE pincode = $1',
+      [user.pincode]
+    );
+    serviceable = pCheck.rows.length > 0;
   }
 
-  if (deliveryResult.rows[0].status === 'suspended') {
-    throw new Error('Your account has been suspended.');
-  }
-}
   const token = jwt.sign(
-    { id: user.id, role: user.role, username: user.username },
+    { id: user.id, role: user.role, username: user.username, pincode: user.pincode, serviceable },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN }
   );
@@ -111,7 +170,10 @@ if (user.role === 'delivery') {
       username: user.username,
       name: user.name,
       phone: user.phone,
-      role: user.role
+      role: user.role,
+      pincode: user.pincode,
+      address: user.address,
+      serviceable
     }
   };
 };
