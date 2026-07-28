@@ -1,12 +1,14 @@
 const pool = require('../../config/db');
 exports.searchProducts = async (req, res) => {
   try {
-    const { q } = req.query;
-    const result = await pool.query(
-      `SELECT p.id, p.name, p.description, p.price, p.stock,
+    const { q, pincode: queryPincode } = req.query;
+    const buyerPincode = req.user?.pincode || queryPincode || null;
+
+    let baseQuery = `
+      SELECT p.id, p.name, p.description, p.price, p.stock,
               p.category, p.image_urls, p.is_available,
               p.unit_type, p.unit_weight, p.price_per_kg, p.return_policy,
-              p.has_variants,
+              p.has_variants, p.seller_pincode,
               p.seller_id as shop_id, p.seller_id,
               s.shop_name, s.locality, s.id as seller_id, s.is_online as seller_is_online,
               COALESCE(
@@ -30,10 +32,17 @@ exports.searchProducts = async (req, res) => {
        AND p.is_available = true
        AND (p.has_variants = true OR p.stock > 0)
        AND (p.name ILIKE $1 OR p.description ILIKE $1 OR p.category ILIKE $1)
-       ORDER BY p.price ASC`,
-      [`%${q || ''}%`]
-    );
-    res.json(result.rows);
+    `;
+
+    if (buyerPincode) {
+      baseQuery += ` ORDER BY CASE WHEN p.seller_pincode = $2 THEN 1 ELSE 2 END ASC, p.created_at DESC`;
+      const result = await pool.query(baseQuery, [`%${q || ''}%`, buyerPincode]);
+      return res.json(result.rows);
+    } else {
+      baseQuery += ` ORDER BY p.created_at DESC`;
+      const result = await pool.query(baseQuery, [`%${q || ''}%`]);
+      return res.json(result.rows);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -55,13 +64,15 @@ exports.getMyProducts = async (req, res) => {
 
 exports.addProduct = async (req, res) => {
   try {
-    const seller = await pool.query('SELECT id FROM sellers WHERE user_id = $1', [req.user.id]);
+    const seller = await pool.query('SELECT id, pincode FROM sellers WHERE user_id = $1', [req.user.id]);
     if (!seller.rows[0]) return res.status(404).json({ error: 'Seller profile not found' });
-    const { name, description, price, category, stock, image_url } = req.body;
+    const sellerPincode = seller.rows[0].pincode || req.user?.pincode || null;
+
+    const { name, description, price, category, stock, image_url, image_urls, return_policy, unit_type, unit_weight, price_per_kg, sku } = req.body;
     const result = await pool.query(
-      `INSERT INTO products (seller_id, name, description, price, category, stock, image_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [seller.rows[0].id, name, description, price, category, stock || 0, image_url]
+      `INSERT INTO products (seller_id, seller_pincode, name, description, price, category, stock, image_url, image_urls, return_policy, unit_type, unit_weight, price_per_kg, sku)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+      [seller.rows[0].id, sellerPincode, name, description, price, category, stock || 0, image_url || null, image_urls || null, return_policy || null, unit_type || 'piece', unit_weight || null, price_per_kg || null, sku || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
