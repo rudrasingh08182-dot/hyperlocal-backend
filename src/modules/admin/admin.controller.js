@@ -157,3 +157,56 @@ exports.suspendDeliveryBoy = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// ── Pincode Management Endpoints ─────────────────────────────
+exports.getServiceablePincodes = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM serviceable_pincodes ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.addServiceablePincode = async (req, res) => {
+  const { pincode, area_name } = req.body;
+  if (!pincode) return res.status(400).json({ error: 'Pincode is required' });
+
+  try {
+    const cleanPincode = pincode.trim();
+    const result = await pool.query(
+      `INSERT INTO serviceable_pincodes (pincode, area_name)
+       VALUES ($1, $2)
+       ON CONFLICT (pincode) DO UPDATE SET area_name = EXCLUDED.area_name
+       RETURNING *`,
+      [cleanPincode, area_name || '']
+    );
+
+    // Automatically update existing users in this pincode to serviceable = true
+    await pool.query('UPDATE users SET serviceable = true WHERE pincode = $1', [cleanPincode]);
+
+    res.status(201).json({ message: 'Pincode activated successfully', pincode: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.removeServiceablePincode = async (req, res) => {
+  const { pincode } = req.params;
+  try {
+    await pool.query('DELETE FROM serviceable_pincodes WHERE pincode = $1', [pincode]);
+    await pool.query('UPDATE users SET serviceable = false WHERE pincode = $1', [pincode]);
+    res.json({ message: 'Pincode deactivated successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getWaitingPincodes = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM waiting_pincodes ORDER BY request_count DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
