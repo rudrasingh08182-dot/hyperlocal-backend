@@ -1,26 +1,29 @@
 const express = require('express');
 const router = express.Router();
-const { register, login } = require('./auth.controller');
+const { register, login, updateProfile } = require('./auth.controller');
+const authMiddleware = require('../../middleware/auth.middleware');
 const pool = require('../../config/db');
 
-// POST /api/auth/register
+// POST /api/auth/register (Buyer)
 router.post('/register', register);
 
 // POST /api/auth/login
 router.post('/login', login);
 
-// POST /api/auth/register-seller (register user + shop in one step)
+// PATCH /api/auth/profile — Update address & pincode
+router.patch('/profile', authMiddleware, updateProfile);
+
+// POST /api/auth/register-seller
 router.post('/register-seller', async (req, res) => {
   try {
-    const { username, name, phone, password, shop_name, address, locality, contact_phone } = req.body;
+    const { username, name, phone, password, shop_name, address, locality, contact_phone, pincode } = req.body;
 
-    if (!username || !name || !phone || !password || !shop_name || !address || !locality) {
+    if (!username || !name || !phone || !password || !shop_name || !address || !locality || !pincode) {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
     const bcrypt = require('bcryptjs');
 
-    // Check existing user
     const existing = await pool.query(
       'SELECT id FROM users WHERE phone = $1 OR username = $2',
       [phone, username]
@@ -29,21 +32,26 @@ router.post('/register-seller', async (req, res) => {
       return res.status(400).json({ error: 'Username or phone already exists' });
     }
 
-    // Create user
+    const pinCheck = await pool.query(
+      'SELECT pincode FROM serviceable_pincodes WHERE pincode = $1',
+      [pincode.trim()]
+    );
+    const isServiceable = pinCheck.rows.length > 0;
+
     const password_hash = await bcrypt.hash(password, 10);
     const userResult = await pool.query(
-      `INSERT INTO users (username, name, phone, password_hash, role)
-       VALUES ($1, $2, $3, $4, 'seller') RETURNING id, name, username, phone`,
-      [username, name, phone, password_hash]
+      `INSERT INTO users (username, name, phone, password_hash, role, address, pincode, serviceable)
+       VALUES ($1, $2, $3, $4, 'seller', $5, $6, $7) 
+       RETURNING id, name, username, phone, address, pincode, serviceable`,
+      [username, name, phone, password_hash, address, pincode.trim(), isServiceable]
     );
 
     const user = userResult.rows[0];
 
-    // Create shop
     await pool.query(
-      `INSERT INTO sellers (user_id, shop_name, address, locality, contact_phone)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [user.id, shop_name, address, locality, contact_phone || phone]
+      `INSERT INTO sellers (user_id, shop_name, address, locality, contact_phone, pincode)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [user.id, shop_name, address, locality, contact_phone || phone, pincode.trim()]
     );
 
     res.status(201).json({
@@ -55,20 +63,21 @@ router.post('/register-seller', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// POST /api/auth/register-delivery
 router.post('/register-delivery', async (req, res) => {
   try {
     const {
       username, name, phone, password,
-      vehicle_type, vehicle_number, locality
+      vehicle_type, vehicle_number, locality, address, pincode
     } = req.body;
 
-    if (!username || !name || !phone || !password) {
+    if (!username || !name || !phone || !password || !pincode) {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
     const bcrypt = require('bcryptjs');
 
-    // Check existing
     const existing = await pool.query(
       'SELECT id FROM users WHERE phone = $1 OR username = $2',
       [phone, username]
@@ -77,21 +86,26 @@ router.post('/register-delivery', async (req, res) => {
       return res.status(400).json({ error: 'Username or phone already exists' });
     }
 
-    // Create user
+    const pinCheck = await pool.query(
+      'SELECT pincode FROM serviceable_pincodes WHERE pincode = $1',
+      [pincode.trim()]
+    );
+    const isServiceable = pinCheck.rows.length > 0;
+
     const password_hash = await bcrypt.hash(password, 10);
     const userResult = await pool.query(
-      `INSERT INTO users (username, name, phone, password_hash, role)
-       VALUES ($1, $2, $3, $4, 'delivery') RETURNING id, name, username, phone`,
-      [username, name, phone, password_hash]
+      `INSERT INTO users (username, name, phone, password_hash, role, address, pincode, serviceable)
+       VALUES ($1, $2, $3, $4, 'delivery', $5, $6, $7) 
+       RETURNING id, name, username, phone, address, pincode, serviceable`,
+      [username, name, phone, password_hash, address, pincode.trim(), isServiceable]
     );
 
     const user = userResult.rows[0];
 
-    // Create delivery boy profile
     await pool.query(
-      `INSERT INTO delivery_boys (user_id, vehicle_type, vehicle_number, locality)
-       VALUES ($1, $2, $3, $4)`,
-      [user.id, vehicle_type, vehicle_number, locality]
+      `INSERT INTO delivery_boys (user_id, vehicle_type, vehicle_number, locality, pincode)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [user.id, vehicle_type, vehicle_number, locality, pincode.trim()]
     );
 
     res.status(201).json({
@@ -103,4 +117,5 @@ router.post('/register-delivery', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 module.exports = router;
