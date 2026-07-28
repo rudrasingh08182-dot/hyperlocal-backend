@@ -1,4 +1,6 @@
 const { registerUser, loginUser } = require('./auth.service');
+const pool = require('../../config/db');
+const jwt = require('jsonwebtoken');
 
 const register = async (req, res) => {
   try {
@@ -30,4 +32,53 @@ const login = async (req, res) => {
   }
 };
 
-module.exports = { register, login };
+const updateProfile = async (req, res) => {
+  const { address, pincode } = req.body;
+  const userId = req.user.id;
+  
+  if (!pincode || pincode.length !== 6) {
+    return res.status(400).json({ error: 'Valid 6-digit pincode is required' });
+  }
+  
+  try {
+    const checkRes = await pool.query(
+      'SELECT pincode FROM serviceable_pincodes WHERE pincode = $1',
+      [pincode.trim()]
+    );
+    const isServiceable = checkRes.rows.length > 0;
+    
+    const result = await pool.query(
+      `UPDATE users 
+       SET address = $1, pincode = $2, serviceable = $3 
+       WHERE id = $4 
+       RETURNING id, name, username, phone, role, address, pincode, serviceable, created_at`,
+      [address, pincode.trim(), isServiceable, userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = result.rows[0];
+    
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role, pincode: user.pincode, serviceable: user.serviceable },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+    
+    res.json({ 
+      message: isServiceable 
+        ? 'Address updated! Service is now available in your area.' 
+        : 'Address updated. Service not available in this area yet.',
+      user,
+      token,
+      serviceable: isServiceable 
+    });
+  } catch (err) {
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+};
+
+module.exports = { register, login, updateProfile };
