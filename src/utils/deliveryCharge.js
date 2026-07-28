@@ -1,12 +1,15 @@
 // utils/deliveryCharge.js
 // ─────────────────────────────────────────────────────────────
-// Delivery charge formula:
-// First 5km  → ₹20 flat
-// After 5km  → ₹20 + (distance - 5) × ₹6
+// Delivery charge formula (slab-wise):
+// 0–3km      → ₹20 flat
+// 3–5km      → ₹30 flat
+// After 5km  → ₹30 + (distance - 5) × ₹6
 // ─────────────────────────────────────────────────────────────
 
-const BASE_CHARGE    = 20;   // ₹20 for first 5km
-const BASE_KM        = 5;    // base km limit
+const TIER1_CHARGE   = 20;   // ₹20 for 0–3km
+const TIER1_KM       = 3;    // first slab limit
+const TIER2_CHARGE   = 30;   // ₹30 for 3–5km
+const BASE_KM        = 5;    // second slab limit
 const PER_EXTRA_KM   = 6;    // ₹6 per km after 5km
 
 /**
@@ -15,15 +18,19 @@ const PER_EXTRA_KM   = 6;    // ₹6 per km after 5km
  * @returns {number} delivery charge in rupees
  */
 function calculateDeliveryCharge(distanceKm) {
-  if (!distanceKm || distanceKm <= 0) return BASE_CHARGE;
+  if (!distanceKm || distanceKm <= 0) return TIER1_CHARGE;
+
+  if (distanceKm <= TIER1_KM) {
+    return TIER1_CHARGE; // flat ₹20 for 0–3km
+  }
 
   if (distanceKm <= BASE_KM) {
-    return BASE_CHARGE; // flat ₹20 for first 5km
+    return TIER2_CHARGE; // flat ₹30 for 3–5km
   }
 
   const extraKm     = distanceKm - BASE_KM;
   const extraCharge = Math.ceil(extraKm) * PER_EXTRA_KM;
-  return BASE_CHARGE + extraCharge;
+  return TIER2_CHARGE + extraCharge;
 }
 
 /**
@@ -40,4 +47,4 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return parseFloat((R * c).toFixed(1));
 }
 
-module.exports = { calculateDeliveryCharge, calculateDistance, BASE_CHARGE, BASE_KM, PER_EXTRA_KM };
+module.exports = { calculateDeliveryCharge, calculateDistance, TIER1_CHARGE, TIER1_KM, TIER2_CHARGE, BASE_KM, PER_EXTRA_KM };
