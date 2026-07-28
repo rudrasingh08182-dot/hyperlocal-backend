@@ -4,6 +4,10 @@ const { getDrivingDistanceKm } = require('../../utils/osrmDistance');
 const pool = require('../../config/db');
 exports.placeOrder = async (req, res) => {
   try {
+    if (req.user?.serviceable === false) {
+      return res.status(403).json({ error: 'Zaplo is currently not available in your area. Order placement is disabled.' });
+    }
+
     const {
       seller_id, items, payment_method,
       delivery_address, delivery_phone, delivery_landmark,
