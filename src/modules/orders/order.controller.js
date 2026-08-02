@@ -8,6 +8,7 @@ exports.placeOrder = async (req, res) => {
       return res.status(403).json({ error: 'Zaplo is currently not available in your area. Order placement is disabled.' });
     }
 
+  
     const {
       seller_id, items, payment_method,
       delivery_address, delivery_phone, delivery_landmark,
@@ -323,6 +324,7 @@ exports.getMyDeliveries = async (req, res) => {
               o.delivery_address, o.delivery_phone, o.delivery_landmark,
               o.delivery_lat, o.delivery_lng,
               o.created_at,
+              o.delivery_payment_confirmed, o.delivery_payment_method, o.delivery_payment_proof_url,
               s.shop_name, s.address as seller_address,
               s.contact_phone as seller_phone, s.locality as seller_locality,
               s.latitude as seller_lat, s.longitude as seller_lng,
