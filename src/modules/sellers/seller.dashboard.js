@@ -38,6 +38,7 @@ exports.getDashboardStats = async (req, res) => {
   SELECT o.id, o.total_amount, o.status, o.payment_method,
          o.created_at, u.name as buyer_name,
          o.delivery_phone, o.delivery_address, o.delivery_landmark,
+         o.delivery_payment_confirmed, o.delivery_payment_method, o.delivery_payment_proof_url,
          COUNT(oi.id) as item_count,
          json_agg(json_build_object(
            'name', p.name,
@@ -49,7 +50,8 @@ exports.getDashboardStats = async (req, res) => {
   JOIN order_items oi ON oi.order_id = o.id
   JOIN products p ON oi.product_id = p.id
   WHERE o.seller_id = $1
-  GROUP BY o.id, u.name, o.delivery_phone, o.delivery_address, o.delivery_landmark
+  GROUP BY o.id, u.name, o.delivery_phone, o.delivery_address, o.delivery_landmark,
+           o.delivery_payment_confirmed, o.delivery_payment_method, o.delivery_payment_proof_url
   ORDER BY o.created_at DESC LIMIT 10
 `, [sellerId]),
 
