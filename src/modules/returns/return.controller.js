@@ -411,7 +411,7 @@ exports.markReturnDeliveredToSeller = async (req, res) => {
 exports.confirmReturn = async (req, res) => {
   try {
     const { id } = req.params;
-    const { refund_or_replacement } = req.body;
+    const { refund_or_replacement } = req.body || {};
 
     const sellerRes = await pool.query(`SELECT id FROM sellers WHERE user_id = $1`, [req.user.id]);
     const sellerId = sellerRes.rows[0]?.id;
