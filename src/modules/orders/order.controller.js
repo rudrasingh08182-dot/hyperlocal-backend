@@ -199,7 +199,7 @@ exports.placeOrder = async (req, res) => {
 exports.getMyOrders = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT o.*, s.shop_name,
+      `SELECT o.*, s.shop_name, s.address as shop_address, s.contact_phone as shop_phone,
               json_agg(json_build_object(
                 'product_id', oi.product_id,
                 'quantity', oi.quantity,
@@ -213,7 +213,7 @@ exports.getMyOrders = async (req, res) => {
        JOIN order_items oi ON oi.order_id = o.id
        JOIN products p ON oi.product_id = p.id
        WHERE o.buyer_id = $1
-       GROUP BY o.id, s.shop_name
+       GROUP BY o.id, s.shop_name, s.address, s.contact_phone
        ORDER BY o.created_at DESC`,
       [req.user.id]
     );
