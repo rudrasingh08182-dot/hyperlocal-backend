@@ -20,13 +20,13 @@ function calculateSplit(totalRupees) {
 // ─────────────────────────────────────────────────────────────
 // CREATE RAZORPAY ORDER — now sets payment_method + Route transfer
 // ─────────────────────────────────────────────────────────────
-async function createRazorpayOrder(orderId) {
+async function createRazorpayOrder(orderId, buyerId) {
   const result = await pool.query(
     `SELECT o.*, s.razorpay_fund_account_id
      FROM orders o
      JOIN sellers s ON o.seller_id = s.id
-     WHERE o.id = $1::uuid`,
-    [orderId]
+     WHERE o.id = $1::uuid AND o.buyer_id = $2::uuid`,
+    [orderId, buyerId]
   );
 
   if (!result.rows[0]) throw new Error('Order not found');
@@ -69,8 +69,8 @@ async function createRazorpayOrder(orderId) {
       platform_commission_paise = $3,
       seller_share_paise = $4,
       payment_method = 'ONLINE'
-     WHERE id = $5::uuid`,
-    [rzpOrder.id, totalPaise, commissionPaise, sellerSharePaise, orderId]
+     WHERE id = $5::uuid AND buyer_id = $6::uuid`,
+    [rzpOrder.id, totalPaise, commissionPaise, sellerSharePaise, orderId, buyerId]
   );
 
   return {
@@ -90,24 +90,33 @@ function verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySign
     .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
     .update(body.toString())
     .digest('hex');
-  return expectedSignature === razorpaySignature;
+  if (typeof razorpaySignature !== 'string') return false;
+  const expected = Buffer.from(expectedSignature, 'hex');
+  const received = Buffer.from(razorpaySignature, 'hex');
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
 }
 
 // ─────────────────────────────────────────────────────────────
 // HANDLE ONLINE PAYMENT SUCCESS (called from /verify route)
 // ─────────────────────────────────────────────────────────────
  
-async function handleOnlinePaymentSuccess(razorpayOrderId, razorpayPaymentId, razorpaySignature) {
+async function handleOnlinePaymentSuccess(razorpayOrderId, razorpayPaymentId, razorpaySignature, buyerId = null, webhookVerified = false) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
  
-    const isValid = verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
-    if (!isValid) throw new Error('Invalid payment signature');
+    // Browser callbacks include the authenticated buyer; webhooks are verified
+    // against their raw-body signature before reaching this function.
+    if (!webhookVerified && buyerId) {
+      const isValid = verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+      if (!isValid) throw new Error('Invalid payment signature');
+    }
  
     const orderResult = await client.query(
-      'SELECT * FROM orders WHERE razorpay_order_id = $1',
-      [razorpayOrderId]
+      buyerId
+        ? 'SELECT * FROM orders WHERE razorpay_order_id = $1 AND buyer_id = $2::uuid FOR UPDATE'
+        : 'SELECT * FROM orders WHERE razorpay_order_id = $1 FOR UPDATE',
+      buyerId ? [razorpayOrderId, buyerId] : [razorpayOrderId]
     );
     if (!orderResult.rows[0]) throw new Error('Order not found');
     const order = orderResult.rows[0];
@@ -196,16 +205,19 @@ async function handleWebhook(req, res) {
 // ─────────────────────────────────────────────────────────────
 // COD DELIVERY — unchanged, was already correct
 // ─────────────────────────────────────────────────────────────
-async function handleCODDelivery(orderId) {
+async function handleCODDelivery(orderId, deliveryUserId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const orderResult = await client.query(
-      'SELECT * FROM orders WHERE id = $1::uuid', [orderId]
+      `SELECT * FROM orders
+       WHERE id = $1::uuid AND delivery_boy_id = $2::uuid
+       FOR UPDATE`, [orderId, deliveryUserId]
     );
     if (!orderResult.rows[0]) throw new Error('Order not found');
     const order = orderResult.rows[0];
+    if (order.payment_status === 'paid') throw new Error('Order is already paid');
 
     const { totalPaise, commissionPaise, sellerSharePaise } = calculateSplit(order.total_amount);
 

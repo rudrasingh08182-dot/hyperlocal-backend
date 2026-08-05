@@ -1,9 +1,9 @@
-/// modules/tracking/tracking.routes.js
+// modules/tracking/tracking.routes.js
 
 const express = require('express');
 const router  = express.Router();
-const multer  = require('multer');
 const auth    = require('../../middleware/auth.middleware');
+const { memoryImageUpload } = require('../../middleware/upload.middleware');
 const {
   getOrderTracking,
   updateOrderStatus,
@@ -14,7 +14,7 @@ const {
   markCashReceived,
 } = require('./tracking.controller');
 
-const screenshotUpload = multer({ storage: multer.memoryStorage() });
+const screenshotUpload = memoryImageUpload({ maxFiles: 1, maxFileSize: 5 * 1024 * 1024 });
 
 // Buyer routes
 router.get('/:orderId',          auth, getOrderTracking);

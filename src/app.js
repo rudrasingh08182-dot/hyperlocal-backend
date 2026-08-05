@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const { createRateLimiter } = require('./middleware/rateLimit.middleware');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const productRoutes = require('./modules/products/product.routes');
@@ -19,6 +20,12 @@ const bannerRoutes = require('./modules/banners/banner.routes');
 
 const app = express();
 
+// Render/nginx sits in front of the app — without this, req.ip resolves to
+// the proxy's IP for every request, so the rate limiter's default
+// keyGenerator (req.ip) would bucket ALL users together and block everyone
+// once combined traffic crosses the limit.
+app.set('trust proxy', 1);
+
 // Health check FIRST (Render needs this)
 app.get('/', (req, res) => {
   res.json({ message: '✅ Hyperlocal API is running' });
@@ -26,8 +33,28 @@ app.get('/', (req, res) => {
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000')
+  .split(',').map((origin) => origin.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+}));
 app.use(morgan('dev'));
+app.use(createRateLimiter({ windowMs: 15 * 60 * 1000, max: 300 }));
+
+// Stricter limiter for payment endpoints — brute-force / abuse protection.
+// Auth routes (/login, /register, /register-seller, /register-delivery)
+// already have their own authLimiter applied at the route level in
+// auth.routes.js — not duplicated here.
+const paymentLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20 });
+app.use('/api/payments', paymentLimiter);
+app.use('/api/payments/qr', paymentLimiter);
+
 app.use('/api/payments/webhook', express.raw({ type: '*/*' }), paymentRoutes);
 
 // Security: explicit body size cap — rejects oversized JSON payloads
@@ -50,10 +77,15 @@ app.use('/api/payments/qr', paymentVerificationRoutes);
 app.use('/api/banners', bannerRoutes);
 
 // 404 handler
-
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
+});
+
+app.use((err, req, res, next) => {
+  if (err && err.name === 'MulterError') return res.status(400).json({ error: 'Invalid or oversized upload' });
+  if (err && err.message === 'Origin not allowed by CORS') return res.status(403).json({ error: 'Origin not allowed' });
+  console.error('Unhandled request error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 module.exports = app;

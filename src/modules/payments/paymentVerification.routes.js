@@ -5,9 +5,9 @@
 
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
 const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
+const { memoryImageUpload } = require('../../middleware/upload.middleware');
 
 const {
   getPaymentDetailsForOrder,
@@ -17,7 +17,7 @@ const {
   rejectPayment,
 } = require('./paymentVerification.controller');
 
-const screenshotUpload = multer({ storage: multer.memoryStorage() });
+const screenshotUpload = memoryImageUpload({ maxFiles: 1, maxFileSize: 5 * 1024 * 1024 });
 
 // Buyer: view seller's UPI/QR + amount for an order they placed
 router.get('/order/:orderId', auth, role('buyer'), getPaymentDetailsForOrder);

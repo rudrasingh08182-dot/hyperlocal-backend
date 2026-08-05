@@ -32,7 +32,8 @@ const getOrderTracking = async (req, res) => {
 
     res.json({ order: rows[0], tracking_log: log });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get order tracking error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -42,23 +43,30 @@ const updateOrderStatus = async (req, res) => {
     const { orderId } = req.params;
     const { status, note } = req.body;
 
-    const validStatuses = ['pending', 'confirmed', 'preparing', 'picked_up', 'out_for_delivery', 'delivered', 'cancelled'];
+    const validStatuses = ['picked_up', 'out_for_delivery', 'delivered'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
-    // Update tracking_status (varchar) always
+    // A delivery partner may only update an order assigned to them.
+    const ownership = await pool.query(
+      `SELECT id FROM orders WHERE id = $1::uuid AND delivery_boy_id = $2::uuid`,
+      [orderId, req.user.id]
+    );
+    if (!ownership.rows[0]) return res.status(403).json({ error: 'You are not assigned to this order' });
+
     await pool.query(
-      `UPDATE orders SET tracking_status = $1 WHERE id = $2::uuid`,
-      [status, orderId]
+      `UPDATE orders SET tracking_status = $1 WHERE id = $2::uuid AND delivery_boy_id = $3::uuid`,
+      [status, orderId, req.user.id]
     );
 
     // Update status (enum) only for valid enum values
     const enumStatuses = ['pending', 'confirmed', 'picked_up', 'delivered', 'cancelled'];
     if (enumStatuses.includes(status)) {
       await pool.query(
-        `UPDATE orders SET status = $1::order_status WHERE id = $2::uuid`,
-        [status, orderId]
+        `UPDATE orders SET status = $1::order_status
+         WHERE id = $2::uuid AND delivery_boy_id = $3::uuid`,
+        [status, orderId, req.user.id]
       );
     }
 
@@ -66,13 +74,13 @@ const updateOrderStatus = async (req, res) => {
     await pool.query(
       `INSERT INTO order_tracking_log (order_id, status, note)
        VALUES ($1::uuid, $2, $3)`,
-      [orderId, status, note || null]
+       [orderId, status, note || null]
     );
 
     res.json({ success: true, status });
   } catch (err) {
-    console.error('STATUS UPDATE ERROR:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Update order status error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -84,18 +92,21 @@ const updateDeliveryLocation = async (req, res) => {
 
     if (!lat || !lng) return res.status(400).json({ error: 'lat and lng required' });
 
-    await pool.query(
+    const result = await pool.query(
       `UPDATE orders SET
         delivery_lat = $1,
         delivery_lng = $2,
         location_updated_at = NOW()
-       WHERE id = $3::uuid`,
-      [lat, lng, orderId]
+       WHERE id = $3::uuid AND delivery_boy_id = $4::uuid
+       RETURNING id`,
+      [lat, lng, orderId, req.user.id]
     );
+    if (!result.rows[0]) return res.status(403).json({ error: 'You are not assigned to this order' });
 
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Update delivery location error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -114,7 +125,8 @@ const getDeliveryLocation = async (req, res) => {
 
     res.json(rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get delivery location error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -161,7 +173,8 @@ const getSellerQr = async (req, res) => {
       qr_code_url: rows[0].qr_code_url,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get seller QR error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -213,7 +226,8 @@ const submitDeliveryPaymentProof = async (req, res) => {
 
     res.json({ success: true, message: 'Payment proof submitted', screenshot_url: screenshotUrl });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Submit delivery payment proof error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -259,7 +273,8 @@ const markCashReceived = async (req, res) => {
 
     res.json({ success: true, message: 'Cash payment marked as received' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Mark cash received error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 

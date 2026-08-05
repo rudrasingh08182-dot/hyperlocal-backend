@@ -31,7 +31,7 @@ const checkAndLogPincode = async (pincode) => {
   return isServiceable;
 };
 
-const registerUser = async ({ username, name, phone, password, role, address, pincode }) => {
+const registerUser = async ({ username, name, phone, password, address, pincode }) => {
   // ── Security: hard cap BEFORE bcrypt hashing ──
   if (typeof password !== 'string' || password.length > 128) {
     throw new Error('Password must be between 8 and 128 characters.');
@@ -65,22 +65,10 @@ const registerUser = async ({ username, name, phone, password, role, address, pi
     `INSERT INTO users (username, name, phone, password_hash, role, address, pincode, serviceable)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id, username, name, phone, role, pincode, serviceable, created_at`,
-    [username, name, phone, password_hash, role || 'buyer', address, pincode.trim(), isServiceable]
+    [username, name, phone, password_hash, 'buyer', address, pincode.trim(), isServiceable]
   );
 
-  const user = result.rows[0];
-
-  // If role is seller, create seller profile with pincode
-  if (role === 'seller') {
-    await pool.query(
-      `INSERT INTO sellers (user_id, shop_name, address, locality, pincode, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending')
-       ON CONFLICT DO NOTHING`,
-      [user.id, `${name}'s Shop`, address, address, pincode.trim()]
-    );
-  }
-
-  return user;
+  return result.rows[0];
 };
 
 const loginUser = async ({ phone, password }) => {

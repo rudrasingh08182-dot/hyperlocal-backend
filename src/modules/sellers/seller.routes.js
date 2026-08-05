@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
 const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
+const { memoryImageUpload } = require('../../middleware/upload.middleware');
 const { getSeller, registerShop, searchShops, getShopProducts, updateSeller, toggleStoreStatus } = require('./seller.controller');
 const { getDashboardStats, createProduct } = require('./seller.dashboard');
 const { saveBankDetails, getBankDetails } = require('./bank.controller'); // 
 const { uploadQrCode, deleteQrCode } = require('./sellerPaymentQr.controller');
 
-const qrUpload = multer({ storage: multer.memoryStorage() });
+const qrUpload = memoryImageUpload({ maxFiles: 1, maxFileSize: 2 * 1024 * 1024 });
 
 router.get('/search', searchShops);
 router.get('/:shopId/products', getShopProducts);
@@ -36,7 +36,8 @@ router.post('/fcm-token', auth, async (req, res) => {
     );
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('FCM token save error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 // Get seller's orders
@@ -63,7 +64,8 @@ router.get('/my-orders', auth, role('seller'), async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Seller orders fetch error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 // Confirm order
@@ -71,8 +73,11 @@ router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
   try {
     const pool = require('../../config/db');
     const result = await pool.query(
-      `UPDATE orders SET status = 'confirmed' WHERE id = $1::uuid RETURNING *`,
-      [req.params.id]
+      `UPDATE orders o SET status = 'confirmed'
+       FROM sellers s
+       WHERE o.id = $1::uuid AND o.seller_id = s.id AND s.user_id = $2::uuid
+       RETURNING o.*`,
+      [req.params.id, req.user.id]
     );
 
     if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
@@ -98,7 +103,8 @@ router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
 
     res.json({ message: 'Order confirmed!', order: result.rows[0] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Order confirm error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -107,12 +113,17 @@ router.patch('/orders/:id/cancel', auth, role('seller'), async (req, res) => {
   try {
     const pool = require('../../config/db');
     const result = await pool.query(
-      `UPDATE orders SET status = 'cancelled' WHERE id = $1::uuid RETURNING *`,
-      [req.params.id]
+      `UPDATE orders o SET status = 'cancelled'
+       FROM sellers s
+       WHERE o.id = $1::uuid AND o.seller_id = s.id AND s.user_id = $2::uuid
+       RETURNING o.*`,
+      [req.params.id, req.user.id]
     );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
     res.json({ message: 'Order cancelled', order: result.rows[0] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Order cancel error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

@@ -29,8 +29,6 @@ async function notifyWhatsApp(userId, message) {
 }
 
 // ── POST /returns ─────────────────────────────────────────────────────────────
-// Buyer creates a return request on a delivered order.
-// Return window: 7 days from delivered_at. After return_completed, no more returns.
 exports.createReturn = async (req, res) => {
   try {
     const { order_id, reason, photo_url } = req.body;
@@ -40,7 +38,6 @@ exports.createReturn = async (req, res) => {
       return res.status(400).json({ error: 'order_id and reason are required' });
     }
 
-    // Validate order
     const orderRes = await pool.query(
       `SELECT o.*, s.user_id as seller_user_id
        FROM orders o
@@ -54,14 +51,12 @@ exports.createReturn = async (req, res) => {
       return res.status(400).json({ error: 'Only delivered orders can be returned' });
     }
 
-    // 7-day return window
     const deliveredAt = new Date(order.delivered_at);
     const daysDiff = Math.floor((Date.now() - deliveredAt) / (1000 * 60 * 60 * 24));
     if (daysDiff > 7) {
       return res.status(400).json({ error: `Return window expired. ${daysDiff} days have passed (max 7).` });
     }
 
-    // Check no existing active return for this order
     const existing = await pool.query(
       `SELECT id, status FROM returns WHERE order_id = $1::uuid AND status NOT IN ('return_rejected', 'return_completed')`,
       [order_id]
@@ -70,7 +65,6 @@ exports.createReturn = async (req, res) => {
       return res.status(400).json({ error: 'A return request already exists for this order' });
     }
 
-    // Create return
     const returnRes = await pool.query(
       `INSERT INTO returns
          (order_id, buyer_id, seller_id, reason, photo_url, status)
@@ -80,7 +74,6 @@ exports.createReturn = async (req, res) => {
     );
     const ret = returnRes.rows[0];
 
-    // Notify seller
     await notifyFcm(
       order.seller_user_id,
       '↩ Return Request',
@@ -93,19 +86,17 @@ exports.createReturn = async (req, res) => {
 
     res.status(201).json({ message: 'Return request submitted', return: ret });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Create return error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── PATCH /returns/:id/accept ─────────────────────────────────────────────────
-// Seller accepts the return. Status → return_accepted, then auto-assign to available pool.
 exports.acceptReturn = async (req, res) => {
   try {
     const { id } = req.params;
     const { notes, refund_or_replacement } = req.body;
 
-    // Verify this seller owns the return
     const sellerRes = await pool.query(`SELECT id FROM sellers WHERE user_id = $1`, [req.user.id]);
     const sellerId = sellerRes.rows[0]?.id;
     if (!sellerId) return res.status(403).json({ error: 'Seller profile not found' });
@@ -125,7 +116,6 @@ exports.acceptReturn = async (req, res) => {
       return res.status(400).json({ error: 'Return not found or already actioned' });
     }
 
-    // Notify buyer
     await notifyFcm(
       ret.rows[0].buyer_id,
       '✅ Return Accepted',
@@ -138,8 +128,8 @@ exports.acceptReturn = async (req, res) => {
 
     res.json({ message: 'Return accepted. Visible in delivery partner pickup pool.', return: ret.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Accept return error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -166,7 +156,6 @@ exports.rejectReturn = async (req, res) => {
       return res.status(400).json({ error: 'Return not found or already actioned' });
     }
 
-    // Notify buyer
     await notifyFcm(
       ret.rows[0].buyer_id,
       '❌ Return Rejected',
@@ -179,17 +168,14 @@ exports.rejectReturn = async (req, res) => {
 
     res.json({ message: 'Return rejected', return: ret.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Reject return error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── GET /returns/available-pickups ────────────────────────────────────────────
-// Delivery partner fetches returns awaiting pickup (status = return_pickup_assigned,
-// no delivery_partner_id assigned yet). Mirrors getAvailableOrders logic.
 exports.getAvailableReturnPickups = async (req, res) => {
   try {
-    // Check if delivery partner is online
     const selfCheck = await pool.query(
       `SELECT is_online FROM delivery_boys WHERE user_id = $1`, [req.user.id]
     );
@@ -220,15 +206,12 @@ exports.getAvailableReturnPickups = async (req, res) => {
 
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Get available return pickups error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── PATCH /returns/:id/accept-pickup ─────────────────────────────────────────
-// Delivery partner self-assigns a return pickup. Mirrors acceptDelivery.
-// Once accepted → removes from all other partners' available list automatically
-// (same mechanism as regular orders: delivery_partner_id IS NULL filter).
 exports.acceptReturnPickup = async (req, res) => {
   try {
     const { id } = req.params;
@@ -255,7 +238,6 @@ exports.acceptReturnPickup = async (req, res) => {
       return res.status(400).json({ error: 'Return pickup already taken or not available' });
     }
 
-    // Notify buyer
     await notifyFcm(
       ret.rows[0].buyer_id,
       '🛵 Pickup Assigned',
@@ -264,13 +246,12 @@ exports.acceptReturnPickup = async (req, res) => {
 
     res.json({ message: 'Return pickup accepted!', return: ret.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Accept return pickup error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── GET /returns/my-return-pickups ────────────────────────────────────────────
-// Delivery partner fetches their active return pickups.
 exports.getMyReturnPickups = async (req, res) => {
   try {
     const result = await pool.query(
@@ -295,13 +276,12 @@ exports.getMyReturnPickups = async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Get my return pickups error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── PATCH /returns/:id/picked-up ─────────────────────────────────────────────
-// Delivery partner marks item collected from buyer.
 exports.markPickedUp = async (req, res) => {
   try {
     const { id } = req.params;
@@ -314,15 +294,14 @@ exports.markPickedUp = async (req, res) => {
     );
     if (ret.rows.length === 0) return res.status(400).json({ error: 'Not found or wrong status' });
 
-    // Notify buyer + seller
     const r = ret.rows[0];
     await notifyFcm(r.buyer_id,   '📦 Item Picked Up', 'Delivery partner has collected your return item.');
     await notifyFcm(r.seller_id,  '📦 Return Picked Up', `Return for order #${r.order_id.slice(-6).toUpperCase()} has been picked up.`);
 
     res.json({ message: 'Marked as picked up', return: r });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Mark picked up error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -341,7 +320,6 @@ exports.markInTransit = async (req, res) => {
 
     const r = ret.rows[0];
 
-    // Notify buyer and seller
     await notifyFcm(
       r.buyer_id,
       '🚀 Return In Transit',
@@ -361,13 +339,12 @@ exports.markInTransit = async (req, res) => {
 
     res.json({ message: 'Marked as in transit', return: r });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Mark in transit error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── PATCH /returns/:id/complete ───────────────────────────────────────────────
-// Delivery partner taps "Return Complete" after handing item to seller.
 exports.markReturnDeliveredToSeller = async (req, res) => {
   try {
     const { id } = req.params;
@@ -382,7 +359,6 @@ exports.markReturnDeliveredToSeller = async (req, res) => {
 
     const r = ret.rows[0];
 
-    // Notify seller to confirm receipt
     const sellerUserRes = await pool.query(
       `SELECT user_id FROM sellers WHERE id = $1`, [r.seller_id]
     );
@@ -401,13 +377,12 @@ exports.markReturnDeliveredToSeller = async (req, res) => {
 
     res.json({ message: 'Return delivered to seller', return: r });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Mark return delivered to seller error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── PATCH /returns/:id/confirm ────────────────────────────────────────────────
-// Seller confirms receipt → closes return → disables future returns for this order.
 exports.confirmReturn = async (req, res) => {
   try {
     const { id } = req.params;
@@ -434,7 +409,6 @@ exports.confirmReturn = async (req, res) => {
 
     const r = ret.rows[0];
 
-    // Notify buyer
     await notifyFcm(
       r.buyer_id,
       '🎉 Return Completed',
@@ -447,8 +421,8 @@ exports.confirmReturn = async (req, res) => {
 
     res.json({ message: 'Return completed successfully', return: r });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error('Confirm return error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -465,38 +439,41 @@ exports.getReturn = async (req, res) => {
        JOIN orders  o       ON r.order_id = o.id
        JOIN users   u_buyer ON r.buyer_id = u_buyer.id
        JOIN sellers s       ON r.seller_id = s.id
-       WHERE r.id = $1::uuid`,
-      [id]
+        WHERE r.id = $1::uuid
+          AND (
+            r.buyer_id = $2::uuid
+            OR r.delivery_partner_id = $2::uuid
+            OR EXISTS (SELECT 1 FROM sellers owner WHERE owner.id = r.seller_id AND owner.user_id = $2::uuid)
+            OR $3 = 'admin'
+          )`,
+       [id, req.user.id, req.user.role]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'Return not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get return error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
 // ── GET /returns ──────────────────────────────────────────────────────────────
-// Query by buyer_id, seller_id, or delivery_partner_id
 exports.listReturns = async (req, res) => {
   try {
-    const { buyer_id, seller_id, delivery_partner_id } = req.query;
+    let whereClause;
+    let params;
 
-    let whereClause = '';
-    const params = [];
-
-    if (buyer_id) {
-      params.push(buyer_id);
-      whereClause = `WHERE r.buyer_id = $${params.length}`;
-    } else if (seller_id) {
-      params.push(seller_id);
-      whereClause = `WHERE r.seller_id = $${params.length}`;
-    } else if (delivery_partner_id) {
-      params.push(delivery_partner_id);
-      whereClause = `WHERE r.delivery_partner_id = $${params.length}`;
+    if (req.user.role === 'admin') {
+      whereClause = '';
+      params = [];
+    } else if (req.user.role === 'seller') {
+      whereClause = `WHERE EXISTS (SELECT 1 FROM sellers owner WHERE owner.id = r.seller_id AND owner.user_id = $1::uuid)`;
+      params = [req.user.id];
+    } else if (req.user.role === 'delivery') {
+      whereClause = 'WHERE r.delivery_partner_id = $1::uuid';
+      params = [req.user.id];
     } else {
-      // Default: return caller's own returns based on role
-      params.push(req.user.id);
-      whereClause = `WHERE r.buyer_id = $${params.length}`;
+      whereClause = 'WHERE r.buyer_id = $1::uuid';
+      params = [req.user.id];
     }
 
     const result = await pool.query(
@@ -515,6 +492,7 @@ exports.listReturns = async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('List returns error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };

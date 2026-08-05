@@ -3,18 +3,21 @@ const router = express.Router();
 const { register, login, updateProfile } = require('./auth.controller');
 const authMiddleware = require('../../middleware/auth.middleware');
 const pool = require('../../config/db');
+const { createRateLimiter } = require('../../middleware/rateLimit.middleware');
+
+const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
 
 // POST /api/auth/register (Buyer)
-router.post('/register', register);
+router.post('/register', authLimiter, register);
 
 // POST /api/auth/login
-router.post('/login', login);
+router.post('/login', authLimiter, login);
 
 // PATCH /api/auth/profile — Update address & pincode
 router.patch('/profile', authMiddleware, updateProfile);
 
 // POST /api/auth/register-seller
-router.post('/register-seller', async (req, res) => {
+router.post('/register-seller', authLimiter, async (req, res) => {
   try {
     const { username, name, phone, password, shop_name, address, locality, contact_phone, pincode } = req.body;
 
@@ -60,12 +63,13 @@ router.post('/register-seller', async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Register seller error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // POST /api/auth/register-delivery
-router.post('/register-delivery', async (req, res) => {
+router.post('/register-delivery', authLimiter, async (req, res) => {
   try {
     const {
       username, name, phone, password,
@@ -114,7 +118,8 @@ router.post('/register-delivery', async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Register delivery error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

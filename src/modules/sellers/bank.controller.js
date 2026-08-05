@@ -1,19 +1,24 @@
 // bank.controller.js
-// Add these functions to your seller.controller.js OR keep separate
-
 const pool = require('../../config/db');
+
+// Masks an account number, keeping only the last 4 digits visible.
+// e.g. "1234567890123" → "XXXXXXXXX0123"
+function maskAccountNumber(accountNumber) {
+  if (!accountNumber) return accountNumber;
+  const str = String(accountNumber);
+  if (str.length <= 4) return str;
+  return 'X'.repeat(str.length - 4) + str.slice(-4);
+}
 
 // POST /sellers/bank-details
 const saveBankDetails = async (req, res) => {
   try {
     const { account_holder_name, bank_name, account_number, ifsc_code, upi_id, account_type } = req.body;
 
-    // Validate required fields
     if (!account_holder_name || !bank_name || !account_number || !ifsc_code) {
       return res.status(400).json({ error: 'Account holder name, bank name, account number and IFSC are required' });
     }
 
-    // Get seller_id from the sellers table using user id from JWT
     const sellerResult = await pool.query(
       'SELECT id FROM sellers WHERE user_id = $1::uuid',
       [req.user.id]
@@ -25,7 +30,6 @@ const saveBankDetails = async (req, res) => {
 
     const seller_id = sellerResult.rows[0].id;
 
-    // Upsert — insert or update if already exists
     const result = await pool.query(
       `INSERT INTO seller_bank_details
         (seller_id, account_holder_name, bank_name, account_number, ifsc_code, upi_id, account_type, updated_at)
@@ -42,7 +46,11 @@ const saveBankDetails = async (req, res) => {
       [seller_id, account_holder_name, bank_name, account_number, ifsc_code, upi_id || null, account_type || 'savings']
     );
 
-    res.json({ success: true, bank_details: result.rows[0] });
+    // Never return the full account number in the response, even to its owner —
+    // masked confirmation is enough for the "saved successfully" UI.
+    const savedDetails = { ...result.rows[0], account_number: maskAccountNumber(result.rows[0].account_number) };
+
+    res.json({ success: true, bank_details: savedDetails });
 
   } catch (err) {
     console.error('saveBankDetails error:', err);
@@ -69,9 +77,14 @@ const getBankDetails = async (req, res) => {
       [seller_id]
     );
 
-    res.json({ bank_details: result.rows[0] || null });
+    const details = result.rows[0]
+      ? { ...result.rows[0], account_number: maskAccountNumber(result.rows[0].account_number) }
+      : null;
+
+    res.json({ bank_details: details });
 
   } catch (err) {
+    console.error('getBankDetails error:', err);
     res.status(500).json({ error: 'Failed to fetch bank details' });
   }
 };

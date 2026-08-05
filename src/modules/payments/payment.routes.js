@@ -22,7 +22,7 @@ router.post('/webhook', async (req, res) => {
 router.post('/create-order/:orderId', auth, role('buyer'), async (req, res) => {
   if (!razorpayService) return res.status(503).json({ error: 'Payment not configured' });
   try {
-    const data = await razorpayService.createRazorpayOrder(req.params.orderId);
+    const data = await razorpayService.createRazorpayOrder(req.params.orderId, req.user.id);
     res.json(data);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -34,7 +34,7 @@ router.post('/verify', auth, role('buyer'), async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
     const result = await razorpayService.handleOnlinePaymentSuccess(
-      razorpay_order_id, razorpay_payment_id, razorpay_signature
+      razorpay_order_id, razorpay_payment_id, razorpay_signature, req.user.id
     );
     res.json(result);
   } catch (err) {
@@ -43,10 +43,10 @@ router.post('/verify', auth, role('buyer'), async (req, res) => {
 });
 
 // ── DELIVERY / SELLER routes ────────────────────────────────
-router.patch('/cod-delivered/:orderId', auth, async (req, res) => {
+router.patch('/cod-delivered/:orderId', auth, role('delivery'), async (req, res) => {
   if (!razorpayService) return res.status(503).json({ error: 'Payment not configured' });
   try {
-    const result = await razorpayService.handleCODDelivery(req.params.orderId);
+    const result = await razorpayService.handleCODDelivery(req.params.orderId, req.user.id);
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });

@@ -4,13 +4,14 @@ const jwt = require('jsonwebtoken');
 
 const register = async (req, res) => {
   try {
-    const { username, name, phone, password, role, address, pincode } = req.body;
+    const { username, name, phone, password, address, pincode } = req.body;
 
     if (!username || !name || !phone || !password || !address || !pincode) {
       return res.status(400).json({ error: 'Username, name, phone, password, address, and pincode are required' });
     }
 
-    const user = await registerUser({ username, name, phone, password, role, address, pincode });
+    // Public registration is deliberately buyer-only. Never trust a role sent by a browser.
+    const user = await registerUser({ username, name, phone, password, address, pincode });
     res.status(201).json({ message: 'User registered successfully', user });
   } catch (err) {
     res.status(400).json({ error: err.message });

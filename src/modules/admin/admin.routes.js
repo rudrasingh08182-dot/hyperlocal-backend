@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
+const { memoryImageUpload } = require('../../middleware/upload.middleware');
 const {
   getAllSellers, getAllBuyers, approveSeller, suspendSeller,
   getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy,
@@ -16,8 +17,13 @@ const {
   getAllBanners, createBanner, updateBanner, deleteBanner, reorderBanners
 } = require('../banners/banner.controller');
 
-const upload = multer({ storage: multer.memoryStorage() });
-const bannerUpload = multer({ storage: multer.memoryStorage() });
+// Bulk upload accepts Excel/ZIP files (not images), so it can't use the
+// image-only memoryImageUpload filter — just a plain size/count cap here.
+const bulkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 3 },
+});
+const bannerUpload = memoryImageUpload({ maxFiles: 1, maxFileSize: 5 * 1024 * 1024 });
 
 router.use(auth, role('admin'));
 
@@ -46,7 +52,7 @@ router.delete('/banners/:id', deleteBanner);
 // Bulk product upload
 router.post(
   '/bulk-upload/validate',
-  upload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }, { name: 'variants', maxCount: 1 }]),
+  bulkUpload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }, { name: 'variants', maxCount: 1 }]),
   validateBulkUpload
 );
 router.post('/bulk-upload/:uploadId/import', importBulkUpload);

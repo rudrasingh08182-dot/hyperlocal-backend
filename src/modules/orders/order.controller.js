@@ -1,14 +1,15 @@
 const { calculateDeliveryCharge, calculateDistance } = require('../../utils/deliveryCharge');
 const { getDrivingDistanceKm } = require('../../utils/osrmDistance');
- 
+
 const pool = require('../../config/db');
+
 exports.placeOrder = async (req, res) => {
+  const client = await pool.connect();
   try {
     if (req.user?.serviceable === false) {
       return res.status(403).json({ error: 'Zaplo is currently not available in your area. Order placement is disabled.' });
     }
 
-  
     const {
       seller_id, items, payment_method,
       delivery_address, delivery_phone, delivery_landmark,
@@ -20,60 +21,68 @@ exports.placeOrder = async (req, res) => {
     }
 
     // ── Store availability check ──
-    // A seller who has switched to "Temporarily Closed" must not receive
-    // new orders, even if the buyer's app was showing stale product data.
     const sellerOnlineCheck = await pool.query('SELECT is_online FROM sellers WHERE id = $1::uuid', [seller_id]);
     if (!sellerOnlineCheck.rows[0]) return res.status(404).json({ error: 'Seller not found' });
     if (sellerOnlineCheck.rows[0].is_online === false) {
       return res.status(400).json({ error: 'This store is temporarily unavailable. Please try again later.' });
     }
 
-    // ── Calculate items total (variant-aware) ──
+    await client.query('BEGIN');
+
+    // ── Calculate items total (variant-aware) — row-locked to prevent
+    // two simultaneous orders from both reading stale stock ──
     let total = 0;
-    // itemDetails caches what we looked up, so we don't re-query in the insert loop below
     const itemDetails = [];
 
     for (const item of items) {
-      const product = await pool.query('SELECT id, price, stock, has_variants FROM products WHERE id=$1::uuid', [item.product_id]);
-      if (!product.rows[0]) return res.status(404).json({ error: 'Product not found' });
+      const product = await client.query(
+        'SELECT id, price, stock, has_variants FROM products WHERE id=$1::uuid FOR UPDATE',
+        [item.product_id]
+      );
+      if (!product.rows[0]) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Product not found' });
+      }
 
       if (item.variant_id) {
-        // Variant purchase — price/stock come from product_variants, NOT the base product
-        const variant = await pool.query(
+        const variant = await client.query(
           `SELECT id, variant_type, variant_value, price, stock
            FROM product_variants
-           WHERE id = $1::uuid AND product_id = $2::uuid AND status = 'active'`,
+           WHERE id = $1::uuid AND product_id = $2::uuid AND status = 'active' FOR UPDATE`,
           [item.variant_id, item.product_id]
         );
-        if (!variant.rows[0]) return res.status(404).json({ error: 'Product variant not found' });
+        if (!variant.rows[0]) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Product variant not found' });
+        }
         if (variant.rows[0].stock < item.quantity) {
+          await client.query('ROLLBACK');
           return res.status(400).json({ error: `Insufficient stock for ${variant.rows[0].variant_value}` });
         }
         total += parseFloat(variant.rows[0].price) * item.quantity;
         itemDetails.push({ ...item, unit_price: variant.rows[0].price, variant: variant.rows[0] });
       } else {
-        // Simple product purchase — unchanged behavior
-        if (product.rows[0].stock < item.quantity) return res.status(400).json({ error: 'Insufficient stock' });
+        if (product.rows[0].stock < item.quantity) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Insufficient stock' });
+        }
         total += parseFloat(product.rows[0].price) * item.quantity;
         itemDetails.push({ ...item, unit_price: product.rows[0].price, variant: null });
       }
     }
 
     // Get seller's coordinates for distance calculation
-    const sellerResult = await pool.query(
+    const sellerResult = await client.query(
       'SELECT latitude, longitude FROM sellers WHERE id = $1::uuid',
       [seller_id]
     );
     const seller = sellerResult.rows[0];
 
-   // Calculate delivery charge
+    // Calculate delivery charge
     let distanceKm = null;
     let deliveryCharge = 20;
 
     if (buyer_lat && buyer_lng && seller?.latitude && seller?.longitude) {
-      // Real road distance via free OSRM routing — falls back to the old
-      // straight-line Haversine calc if OSRM is slow/down, so order
-      // placement never breaks because of this.
       distanceKm = await getDrivingDistanceKm(
         parseFloat(seller.latitude), parseFloat(seller.longitude),
         parseFloat(buyer_lat), parseFloat(buyer_lng)
@@ -88,15 +97,10 @@ exports.placeOrder = async (req, res) => {
     }
     const grandTotal = parseFloat(total) + deliveryCharge;
 
-    // ── Initial order status ──
-    // COD / already-verified flows start at 'pending' (unchanged behavior).
-    // The temporary QR payment flow starts at 'pending_payment' — the order
-    // must NOT be treated as placed/confirmed until the buyer uploads proof
-    // and the seller approves it (see payments/paymentVerification.controller.js).
     const initialStatus = payment_method === 'ONLINE_QR' ? 'pending_payment' : 'pending';
 
-   // Create order
-    const order = await pool.query(
+    // Create order
+    const order = await client.query(
       `INSERT INTO orders 
         (buyer_id, seller_id, status, payment_method, total_amount, 
          delivery_charge, distance_km, grand_total,
@@ -110,10 +114,49 @@ exports.placeOrder = async (req, res) => {
        buyer_lat || null, buyer_lng || null]
     );
 
-    // Send WhatsApp notification to seller — sent for BOTH COD and Online (QR)
-    // orders. The message text tells the seller which case it is, so they know
-    // whether to expect Accept/Reject buttons or the blue "View Payment Details"
-    // button when they open the Orders tab.
+    // ── Create order items & reduce stock ATOMICALLY ──
+    // The WHERE stock >= $qty clause makes this a single atomic check-and-decrement,
+    // so two simultaneous orders can never both succeed against a stock of 1.
+    for (const item of itemDetails) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value)
+         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7)`,
+        [
+          order.rows[0].id,
+          item.product_id,
+          item.quantity,
+          item.unit_price,
+          item.variant_id || null,
+          item.variant?.variant_type || null,
+          item.variant?.variant_value || null,
+        ]
+      );
+
+      if (item.variant_id) {
+        const stockUpdate = await client.query(
+          `UPDATE product_variants SET stock = stock - $1 WHERE id = $2::uuid AND stock >= $1 RETURNING id`,
+          [item.quantity, item.variant_id]
+        );
+        if (stockUpdate.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: `Insufficient stock for ${item.variant.variant_value} — someone just bought it` });
+        }
+      } else {
+        const stockUpdate = await client.query(
+          `UPDATE products SET stock = stock - $1 WHERE id=$2::uuid AND stock >= $1 RETURNING id`,
+          [item.quantity, item.product_id]
+        );
+        if (stockUpdate.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Insufficient stock — someone just bought this item' });
+        }
+      }
+    }
+
+    await client.query('COMMIT');
+
+    // ── Notifications — sent AFTER commit so a notification failure never
+    // rolls back an already-successful order ──
     try {
       const { sendWhatsApp } = require('../../config/whatsapp');
       const sellerInfo = await pool.query(
@@ -135,7 +178,6 @@ exports.placeOrder = async (req, res) => {
       console.error('WhatsApp notification error:', waErr.message);
     }
 
-    // Send FCM notification
     try {
       const { sendNotification } = require('../../config/firebase');
       const sellerFcm = await pool.query(
@@ -153,36 +195,6 @@ exports.placeOrder = async (req, res) => {
       console.error('FCM ERROR:', fcmErr.message);
     }
 
-    // ── Create order items & reduce stock (variant-aware) ──
-    for (const item of itemDetails) {
-      await pool.query(
-        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value)
-         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7)`,
-        [
-          order.rows[0].id,
-          item.product_id,
-          item.quantity,
-          item.unit_price,
-          item.variant_id || null,
-          item.variant?.variant_type || null,
-          item.variant?.variant_value || null,
-        ]
-      );
-
-      if (item.variant_id) {
-        // Reduce the VARIANT's stock — base product stock is untouched
-        await pool.query(
-          `UPDATE product_variants SET stock = stock - $1 WHERE id = $2::uuid`,
-          [item.quantity, item.variant_id]
-        );
-      } else {
-        await pool.query(
-          `UPDATE products SET stock = stock - $1 WHERE id=$2::uuid`,
-          [item.quantity, item.product_id]
-        );
-      }
-    }
-
     res.status(201).json({
       message: 'Order placed successfully!',
       order: order.rows[0],
@@ -192,7 +204,11 @@ exports.placeOrder = async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    await client.query('ROLLBACK');
+    console.error('Place order error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
   }
 };
 
@@ -219,7 +235,8 @@ exports.getMyOrders = async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get my orders error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -238,8 +255,6 @@ exports.getAvailableOrders = async (req, res) => {
   try {
     const { lat, lng } = req.query;
 
-    // If this delivery partner has switched themselves Offline, they should
-    // not see (or be able to accept) any new available orders.
     const selfCheck = await pool.query('SELECT is_online FROM delivery_boys WHERE user_id = $1', [req.user.id]);
     if (selfCheck.rows[0] && selfCheck.rows[0].is_online === false) {
       return res.json([]);
@@ -281,7 +296,8 @@ exports.getAvailableOrders = async (req, res) => {
 
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get available orders error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -289,8 +305,6 @@ exports.acceptDelivery = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Defense in depth — even if a stale "Available Orders" list is showing
-    // on the client, block accepting once this partner has gone Offline.
     const selfCheck = await pool.query('SELECT is_online FROM delivery_boys WHERE user_id = $1', [req.user.id]);
     if (selfCheck.rows[0] && selfCheck.rows[0].is_online === false) {
       return res.status(400).json({ error: 'You are currently Offline. Go Online to accept new deliveries.' });
@@ -313,7 +327,8 @@ exports.acceptDelivery = async (req, res) => {
 
     res.json({ message: 'Delivery accepted!', order: result.rows[0] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Accept delivery error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -340,7 +355,8 @@ exports.getMyDeliveries = async (req, res) => {
 
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get my deliveries error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -370,7 +386,8 @@ exports.markDelivered = async (req, res) => {
 
     res.json({ message: 'Order marked as delivered!', order: result.rows[0] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Mark delivered error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
@@ -385,14 +402,11 @@ exports.updateLocation = async (req, res) => {
 
     res.json({ message: 'Location updated' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Update location error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-// PATCH /orders/toggle-availability — delivery partner Online/Offline toggle.
-// Going offline just stops NEW deliveries from being shown/assignable —
-// it never touches an already-accepted active delivery, so the partner can
-// always finish a delivery already in progress before going fully offline.
 exports.toggleDeliveryAvailability = async (req, res) => {
   try {
     const { is_online } = req.body;
@@ -408,18 +422,17 @@ exports.toggleDeliveryAvailability = async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: 'Delivery profile not found' });
     res.json({ message: is_online ? 'You are now Online' : 'You are now Offline', is_online: result.rows[0].is_online });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Toggle availability error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-
-// GET /orders/my-availability — lets DeliveryDashboard know the current
-// toggle state on page load/refresh (no dedicated self-profile endpoint existed).
 exports.getMyAvailability = async (req, res) => {
   try {
     const result = await pool.query('SELECT is_online FROM delivery_boys WHERE user_id = $1', [req.user.id]);
     res.json({ is_online: result.rows[0]?.is_online ?? true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Get availability error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
