@@ -263,6 +263,7 @@ exports.getAvailableOrders = async (req, res) => {
     const result = await pool.query(
       `SELECT o.id, o.total_amount, o.payment_method, o.delivery_address,
               o.delivery_phone, o.delivery_landmark, o.created_at,
+              o.distance_km as seller_buyer_distance_km,
               s.shop_name, s.address as seller_address, s.contact_phone as seller_phone,
               s.locality as seller_locality, s.latitude as seller_lat, s.longitude as seller_lng,
               u.name as buyer_name
@@ -339,6 +340,7 @@ exports.getMyDeliveries = async (req, res) => {
               o.delivery_address, o.delivery_phone, o.delivery_landmark,
               o.delivery_lat, o.delivery_lng,
               o.created_at,
+              o.distance_km as seller_buyer_distance_km,
               o.delivery_payment_confirmed, o.delivery_payment_method, o.delivery_payment_proof_url,
               s.shop_name, s.address as seller_address,
               s.contact_phone as seller_phone, s.locality as seller_locality,
