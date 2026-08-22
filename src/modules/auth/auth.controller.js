@@ -20,13 +20,18 @@ const register = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { phone, password } = req.body;
+    const { phone, password, role } = req.body;
 
-    if (!phone || !password) {
-      return res.status(400).json({ error: 'Phone and password are required' });
+    if (!phone || !password || !role) {
+      return res.status(400).json({ error: 'Phone, password, and role are required' });
     }
 
     const data = await loginUser({ phone, password });
+
+    if (data.user.role !== role) {
+      return res.status(403).json({ error: `This account is not registered as a ${role}` });
+    }
+
     res.status(200).json({ message: 'Login successful', ...data });
   } catch (err) {
     res.status(401).json({ error: err.message });
