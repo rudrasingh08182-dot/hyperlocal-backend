@@ -11,7 +11,22 @@ exports.searchProducts = async (req, res) => {
               p.has_variants, p.seller_pincode,
               p.seller_id as shop_id, p.seller_id,
               s.shop_name, s.locality, s.id as seller_id, s.is_online as seller_is_online,
-                           COALESCE(
+              COALESCE(
+                (SELECT json_agg(
+                   json_build_object(
+                     'id', pv.id,
+                     'variant_type', pv.variant_type,
+                     'variant_value', pv.variant_value,
+                     'price', pv.price,
+                     'stock', pv.stock,
+                     'display_order', pv.display_order
+                   ) ORDER BY pv.display_order
+                 )
+                 FROM product_variants pv
+                 WHERE pv.product_id = p.id AND pv.status = 'active'
+                ), '[]'::json
+              ) as variants,
+              COALESCE(
                 (SELECT json_agg(pc_agg) FROM (
                    SELECT pc.id, pc.color_name, pc.color_code, pc.images, pc.display_order,
                           COALESCE((SELECT json_agg(json_build_object(
@@ -20,7 +35,8 @@ exports.searchProducts = async (req, res) => {
                    FROM product_colors pc WHERE pc.product_id = p.id ORDER BY pc.display_order
                  ) pc_agg), '[]'::json
               ) as colors,
-              p.has_color_variants,
+              p.has_color_variants
+       FROM products p
        JOIN sellers s ON p.seller_id = s.id
        WHERE s.status = 'approved'
        AND p.is_available = true
