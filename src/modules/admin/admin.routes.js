@@ -4,6 +4,12 @@ const multer = require('multer');
 const auth = require('../../middleware/auth.middleware');
 const role = require('../../middleware/role.middleware');
 const { memoryImageUpload } = require('../../middleware/upload.middleware');
+
+const {
+  notifyAllBuyers,
+  notifyAllSellers,
+  notifyAll,
+} = require('./broadcast.controller');
 const {
   getAllSellers, getAllBuyers, approveSeller, suspendSeller,
   getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy,
@@ -57,5 +63,10 @@ router.post(
 );
 router.post('/bulk-upload/:uploadId/import', importBulkUpload);
 router.get('/bulk-upload/error-report', downloadErrorReport);
+
+// ── Admin Broadcast Notifications ────────────────────────────
+router.post('/notify/buyers',  notifyAllBuyers);
+router.post('/notify/sellers', notifyAllSellers);
+router.post('/notify/all',     notifyAll);
 
 module.exports = router;

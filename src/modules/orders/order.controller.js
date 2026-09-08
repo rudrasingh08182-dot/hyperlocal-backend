@@ -44,7 +44,26 @@ exports.placeOrder = async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
       }
 
-      if (item.variant_id) {
+            if (item.color_size_id) {
+        const cs = await client.query(
+          `SELECT pcs.id, pcs.size, pcs.stock, pcs.price, pc.color_name
+           FROM product_color_sizes pcs
+           JOIN product_colors pc ON pcs.color_id = pc.id
+           WHERE pcs.id = $1::uuid AND pc.product_id = $2::uuid FOR UPDATE`,
+          [item.color_size_id, item.product_id]
+        );
+        if (!cs.rows[0]) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Selected color/size not found' });
+        }
+        const price = cs.rows[0].price != null ? cs.rows[0].price : product.rows[0].price;
+        if (cs.rows[0].stock < item.quantity) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: `${cs.rows[0].color_name} / ${cs.rows[0].size} is out of stock` });
+        }
+        total += parseFloat(price) * item.quantity;
+        itemDetails.push({ ...item, unit_price: price, colorSize: cs.rows[0] });
+      } else if (item.variant_id) {
         const variant = await client.query(
           `SELECT id, variant_type, variant_value, price, stock
            FROM product_variants
@@ -119,8 +138,8 @@ exports.placeOrder = async (req, res) => {
     // so two simultaneous orders can never both succeed against a stock of 1.
     for (const item of itemDetails) {
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value)
-         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7)`,
+        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value, color_size_id, color_name, size)
+         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7, $8::uuid, $9, $10)`,
         [
           order.rows[0].id,
           item.product_id,
@@ -129,10 +148,22 @@ exports.placeOrder = async (req, res) => {
           item.variant_id || null,
           item.variant?.variant_type || null,
           item.variant?.variant_value || null,
+          item.color_size_id || null,
+          item.colorSize?.color_name || null,
+          item.colorSize?.size || null,
         ]
       );
 
-      if (item.variant_id) {
+      if (item.color_size_id) {
+        const stockUpdate = await client.query(
+          `UPDATE product_color_sizes SET stock = stock - $1, updated_at = NOW() WHERE id = $2::uuid AND stock >= $1 RETURNING id`,
+          [item.quantity, item.color_size_id]
+        );
+        if (stockUpdate.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: `${item.colorSize.color_name} / ${item.colorSize.size} just sold out — someone else bought it` });
+        }
+      } else if (item.variant_id) {
         const stockUpdate = await client.query(
           `UPDATE product_variants SET stock = stock - $1 WHERE id = $2::uuid AND stock >= $1 RETURNING id`,
           [item.quantity, item.variant_id]
@@ -178,21 +209,62 @@ exports.placeOrder = async (req, res) => {
       console.error('WhatsApp notification error:', waErr.message);
     }
 
+    // ── Seller ko "Naya Order Aaya" notification ─────────────
     try {
       const { sendNotification } = require('../../config/firebase');
-      const sellerFcm = await pool.query(
-        `SELECT fcm_token FROM sellers WHERE id = $1::uuid`,
-        [seller_id]
+
+      // Seller ka FCM token + buyer ka naam ek saath fetch karo
+      const sellerFcmResult = await pool.query(
+        `SELECT s.fcm_token, u_buyer.name as buyer_name
+         FROM sellers s
+         JOIN users u_buyer ON u_buyer.id = $2
+         WHERE s.id = $1::uuid`,
+        [seller_id, req.user.id]
       );
-      if (sellerFcm.rows[0]?.fcm_token) {
+
+      if (sellerFcmResult.rows[0]?.fcm_token) {
+        const buyerName   = sellerFcmResult.rows[0].buyer_name || 'Ek customer';
+        const orderId     = order.rows[0].id.slice(-6).toUpperCase();
+        const payLabel    = payment_method === 'COD'        ? 'Cash on Delivery'
+                          : payment_method === 'ONLINE_QR'  ? 'UPI / QR Payment'
+                          : 'Online Payment';
+
         await sendNotification(
-          sellerFcm.rows[0].fcm_token,
-          '🛒 New Order!',
-          `You have a new order of ₹${total}`
+          sellerFcmResult.rows[0].fcm_token,
+          '🛒 Naya Order Aaya! | New Order Received!',
+          `Order #${orderId} — ₹${total} | ${buyerName} ne order kiya hai. Payment: ${payLabel}. App mein jaakar jaldi confirm karein! ✅`,
+          {
+            orderId:       order.rows[0].id,
+            amount:        String(total),
+            buyerName:     buyerName,
+            paymentMethod: payment_method,
+            type:          'new_order',
+          }
         );
       }
-    } catch (fcmErr) {
-      console.error('FCM ERROR:', fcmErr.message);
+    } catch (fcmSellerErr) {
+      console.error('FCM seller new-order notification error:', fcmSellerErr.message);
+    }
+
+        // ── Buyer ko "Order Placed" notification ──────────────────
+    try {
+      const { sendNotification } = require('../../config/firebase');
+
+      // Buyer ka fcm_token fetch karo
+      const buyerFcm = await pool.query(
+        `SELECT fcm_token FROM users WHERE id = $1`,
+        [req.user.id]
+      );
+      if (buyerFcm.rows[0]?.fcm_token) {
+        await sendNotification(
+          buyerFcm.rows[0].fcm_token,
+          '🎉 Order Place Ho Gaya!',
+          `Aapka order #${order.rows[0].id.slice(-6).toUpperCase()} accept kar liya gaya hai. Kuch hi der mein deliver ho jayega!`,
+          { orderId: order.rows[0].id, type: 'order_placed' }
+        );
+      }
+    } catch (fcmBuyerErr) {
+      console.error('FCM buyer notification error:', fcmBuyerErr.message);
     }
 
     res.status(201).json({
@@ -376,7 +448,7 @@ exports.markDelivered = async (req, res) => {
 
     const result = await pool.query(
       `UPDATE orders SET status = 'delivered', delivered_at = NOW()
-       WHERE id = $1::uuid 
+       WHERE id = $1::uuid
        AND (delivery_boy_id = $2 OR status = 'picked_up')
        RETURNING *`,
       [id, req.user.id]
@@ -386,7 +458,42 @@ exports.markDelivered = async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json({ message: 'Order marked as delivered!', order: result.rows[0] });
+    const deliveredOrder = result.rows[0];
+
+    // ── Buyer + Seller ko "Order Delivered" notification ─────────────
+    try {
+      const { sendNotification } = require('../../config/firebase');
+
+      // Buyer ka token
+      const buyerFcm = await pool.query(
+        `SELECT fcm_token FROM users WHERE id = $1`, [deliveredOrder.buyer_id]
+      );
+      if (buyerFcm.rows[0]?.fcm_token) {
+        await sendNotification(
+          buyerFcm.rows[0].fcm_token,
+          '✅ Order Deliver Ho Gaya!',
+          `Aapka order #${deliveredOrder.id.slice(-6).toUpperCase()} successfully deliver ho gaya. Apna experience share karein!`,
+          { orderId: deliveredOrder.id, type: 'order_delivered' }
+        );
+      }
+
+      // Seller ka token
+      const sellerFcm = await pool.query(
+        `SELECT fcm_token FROM sellers WHERE id = $1::uuid`, [deliveredOrder.seller_id]
+      );
+      if (sellerFcm.rows[0]?.fcm_token) {
+        await sendNotification(
+          sellerFcm.rows[0].fcm_token,
+          '🚀 Order Deliver Ho Gaya!',
+          `Order #${deliveredOrder.id.slice(-6).toUpperCase()} buyer tak pahunch gaya. ₹${deliveredOrder.total_amount} aapke account mein credit ho gaya.`,
+          { orderId: deliveredOrder.id, type: 'order_delivered_seller' }
+        );
+      }
+    } catch (fcmErr) {
+      console.error('FCM delivered notification error:', fcmErr.message);
+    }
+
+    res.json({ message: 'Order marked as delivered!', order: deliveredOrder });
   } catch (err) {
     console.error('Mark delivered error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -435,6 +542,46 @@ exports.getMyAvailability = async (req, res) => {
     res.json({ is_online: result.rows[0]?.is_online ?? true });
   } catch (err) {
     console.error('Get availability error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// GET /api/orders/delivery-estimate?seller_id=...&buyer_lat=...&buyer_lng=...
+// Buyer cart screen calls this to show the REAL by-road delivery charge
+// before placing the order — instead of a hardcoded flat ₹20.
+exports.getDeliveryEstimate = async (req, res) => {
+  try {
+    const { seller_id, buyer_lat, buyer_lng } = req.query;
+    if (!seller_id || !buyer_lat || !buyer_lng) {
+      return res.status(400).json({ error: 'seller_id, buyer_lat, buyer_lng are required' });
+    }
+
+    const sellerResult = await pool.query(
+      'SELECT latitude, longitude FROM sellers WHERE id = $1::uuid',
+      [seller_id]
+    );
+    const seller = sellerResult.rows[0];
+
+    // Seller location not set yet — fall back to minimum flat charge
+    if (!seller || !seller.latitude || !seller.longitude) {
+      return res.json({ distance_km: null, delivery_charge: 20 });
+    }
+
+    let distanceKm = await getDrivingDistanceKm(
+      parseFloat(seller.latitude), parseFloat(seller.longitude),
+      parseFloat(buyer_lat), parseFloat(buyer_lng)
+    );
+    if (distanceKm === null) {
+      distanceKm = calculateDistance(
+        parseFloat(buyer_lat), parseFloat(buyer_lng),
+        parseFloat(seller.latitude), parseFloat(seller.longitude)
+      );
+    }
+
+    const charge = calculateDeliveryCharge(distanceKm);
+    res.json({ distance_km: distanceKm, delivery_charge: charge });
+  } catch (err) {
+    console.error('Delivery estimate error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 };

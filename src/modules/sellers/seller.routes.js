@@ -76,17 +76,17 @@ router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
       `UPDATE orders o SET status = 'confirmed'
        FROM sellers s
        WHERE o.id = $1::uuid AND o.seller_id = s.id AND s.user_id = $2::uuid
-       RETURNING o.*`,
+       RETURNING o.*, s.shop_name, s.id as s_id`,
       [req.params.id, req.user.id]
     );
 
     if (!result.rows[0]) return res.status(404).json({ error: 'Order not found' });
 
-    // Notify every approved delivery boy that a new order is ready for pickup —
-    // best-effort, never blocks the response.
+    const order = result.rows[0];
+
+    // ── WhatsApp notification (existing) ─────────────────────────────
     try {
       const { sendWhatsApp } = require('../../config/whatsapp');
-      const order = result.rows[0];
       const deliveryBoys = await pool.query(
         `SELECT u.phone FROM delivery_boys d JOIN users u ON d.user_id = u.id WHERE d.status = 'approved'`
       );
@@ -101,13 +101,40 @@ router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
       console.error('WhatsApp notification error (delivery boys):', waErr.message);
     }
 
-    res.json({ message: 'Order confirmed!', order: result.rows[0] });
+    // ── FCM notification — saare approved delivery boys ko ───────────
+    try {
+      const { sendToMany } = require('../../config/firebase');
+      const dbFcmResult = await pool.query(
+        `SELECT u.fcm_token
+         FROM delivery_boys d
+         JOIN users u ON d.user_id = u.id
+         WHERE d.status = 'approved'
+           AND u.fcm_token IS NOT NULL`
+      );
+      const deliveryTokens = dbFcmResult.rows.map(r => r.fcm_token);
+      if (deliveryTokens.length > 0) {
+        await sendToMany(
+          deliveryTokens,
+          '🚴 Order Pickup Available!',
+          `Shop: ${order.shop_name || 'Zaplo Shop'} mein ek order hai. ₹${order.total_amount} — Available Orders tab mein dekho!`,
+          {
+            orderId: order.id,
+            amount: String(order.total_amount),
+            shopName: order.shop_name || 'Zaplo',
+            type: 'order_available',
+          }
+        );
+      }
+    } catch (fcmErr) {
+      console.error('FCM delivery boys FCM error:', fcmErr.message);
+    }
+
+    res.json({ message: 'Order confirmed!', order });
   } catch (err) {
     console.error('Order confirm error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 // Cancel order
 router.patch('/orders/:id/cancel', auth, role('seller'), async (req, res) => {
   try {

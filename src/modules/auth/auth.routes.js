@@ -123,4 +123,21 @@ router.post('/register-delivery', authLimiter, async (req, res) => {
   }
 });
 
+// PATCH /api/auth/fcm-token — Buyer aur Delivery boy ka FCM token save karo
+router.patch('/fcm-token', authMiddleware, async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'FCM token required' });
+
+    await pool.query(
+      `UPDATE users SET fcm_token = $1 WHERE id = $2`,
+      [token, req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('FCM token save error (user):', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = router;
