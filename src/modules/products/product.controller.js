@@ -38,6 +38,7 @@ exports.searchProducts = async (req, res) => {
       return res.json(result.rows);
     }
   } catch (err) {
+    console.error('Search products error:', err.message);
     res.status(500).json({ error: err.message });
   }
 };
