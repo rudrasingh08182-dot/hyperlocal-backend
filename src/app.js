@@ -17,7 +17,7 @@ const reviewRoutes = require('./modules/reviews/review.routes');
 const trackingRoutes = require('./modules/tracking/tracking.routes');
 const paymentVerificationRoutes = require('./modules/payments/paymentVerification.routes');
 const bannerRoutes = require('./modules/banners/banner.routes');
-
+const notificationRoutes = require('./modules/notifications/notification.routes');
 const app = express();
 
 // Render/nginx sits in front of the app — without this, req.ip resolves to
@@ -75,7 +75,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/tracking', trackingRoutes);
 app.use('/api/payments/qr', paymentVerificationRoutes);
 app.use('/api/banners', bannerRoutes);
-
+app.use('/api/notifications', notificationRoutes);
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });

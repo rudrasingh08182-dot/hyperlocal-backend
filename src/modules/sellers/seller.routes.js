@@ -129,6 +129,22 @@ router.patch('/orders/:id/confirm', auth, role('seller'), async (req, res) => {
       console.error('FCM delivery boys FCM error:', fcmErr.message);
     }
 
+    // ── Buyer ko "Order Confirmed" notification ───────────────────────
+    try {
+      const { notifyUser } = require('../notifications/notification.service');
+      const buyerFcm = await pool.query(`SELECT fcm_token FROM users WHERE id = $1`, [order.buyer_id]);
+      await notifyUser(
+        order.buyer_id,
+        buyerFcm.rows[0]?.fcm_token,
+        '✅ Order Confirm Ho Gaya!',
+        `${order.shop_name} ne aapka order #${order.id.slice(-6).toUpperCase()} confirm kar diya hai. Jaldi hi deliver hoga!`,
+        'order_confirmed',
+        { orderId: order.id }
+      );
+    } catch (buyerNotifErr) {
+      console.error('Buyer order-confirmed notification error:', buyerNotifErr.message);
+    }
+
     res.json({ message: 'Order confirmed!', order });
   } catch (err) {
     console.error('Order confirm error:', err);

@@ -211,60 +211,59 @@ exports.placeOrder = async (req, res) => {
 
     // ── Seller ko "Naya Order Aaya" notification ─────────────
     try {
-      const { sendNotification } = require('../../config/firebase');
+      const { notifyUser } = require('../notifications/notification.service');
 
-      // Seller ka FCM token + buyer ka naam ek saath fetch karo
       const sellerFcmResult = await pool.query(
-        `SELECT s.fcm_token, u_buyer.name as buyer_name
+        `SELECT s.fcm_token, s.user_id, u_buyer.name as buyer_name
          FROM sellers s
          JOIN users u_buyer ON u_buyer.id = $2
          WHERE s.id = $1::uuid`,
         [seller_id, req.user.id]
       );
 
-      if (sellerFcmResult.rows[0]?.fcm_token) {
+      if (sellerFcmResult.rows[0]) {
         const buyerName   = sellerFcmResult.rows[0].buyer_name || 'Ek customer';
         const orderId     = order.rows[0].id.slice(-6).toUpperCase();
         const payLabel    = payment_method === 'COD'        ? 'Cash on Delivery'
                           : payment_method === 'ONLINE_QR'  ? 'UPI / QR Payment'
                           : 'Online Payment';
 
-        await sendNotification(
+        await notifyUser(
+          sellerFcmResult.rows[0].user_id,
           sellerFcmResult.rows[0].fcm_token,
           '🛒 Naya Order Aaya! | New Order Received!',
           `Order #${orderId} — ₹${total} | ${buyerName} ne order kiya hai. Payment: ${payLabel}. App mein jaakar jaldi confirm karein! ✅`,
+          'new_order',
           {
             orderId:       order.rows[0].id,
             amount:        String(total),
             buyerName:     buyerName,
             paymentMethod: payment_method,
-            type:          'new_order',
           }
         );
       }
     } catch (fcmSellerErr) {
-      console.error('FCM seller new-order notification error:', fcmSellerErr.message);
+      console.error('Seller new-order notification error:', fcmSellerErr.message);
     }
 
         // ── Buyer ko "Order Placed" notification ──────────────────
     try {
-      const { sendNotification } = require('../../config/firebase');
+      const { notifyUser } = require('../notifications/notification.service');
 
-      // Buyer ka fcm_token fetch karo
       const buyerFcm = await pool.query(
         `SELECT fcm_token FROM users WHERE id = $1`,
         [req.user.id]
       );
-      if (buyerFcm.rows[0]?.fcm_token) {
-        await sendNotification(
-          buyerFcm.rows[0].fcm_token,
-          '🎉 Order Place Ho Gaya!',
-          `Aapka order #${order.rows[0].id.slice(-6).toUpperCase()} accept kar liya gaya hai. Kuch hi der mein deliver ho jayega!`,
-          { orderId: order.rows[0].id, type: 'order_placed' }
-        );
-      }
+      await notifyUser(
+        req.user.id,
+        buyerFcm.rows[0]?.fcm_token,
+        '🎉 Order Place Ho Gaya!',
+        `Aapka order #${order.rows[0].id.slice(-6).toUpperCase()} place ho gaya hai. Seller confirm karega toh aapko batayenge!`,
+        'order_placed',
+        { orderId: order.rows[0].id }
+      );
     } catch (fcmBuyerErr) {
-      console.error('FCM buyer notification error:', fcmBuyerErr.message);
+      console.error('Buyer notification error:', fcmBuyerErr.message);
     }
 
     res.status(201).json({
@@ -462,35 +461,35 @@ exports.markDelivered = async (req, res) => {
 
     // ── Buyer + Seller ko "Order Delivered" notification ─────────────
     try {
-      const { sendNotification } = require('../../config/firebase');
+      const { notifyUser } = require('../notifications/notification.service');
 
-      // Buyer ka token
       const buyerFcm = await pool.query(
         `SELECT fcm_token FROM users WHERE id = $1`, [deliveredOrder.buyer_id]
       );
-      if (buyerFcm.rows[0]?.fcm_token) {
-        await sendNotification(
-          buyerFcm.rows[0].fcm_token,
-          '✅ Order Deliver Ho Gaya!',
-          `Aapka order #${deliveredOrder.id.slice(-6).toUpperCase()} successfully deliver ho gaya. Apna experience share karein!`,
-          { orderId: deliveredOrder.id, type: 'order_delivered' }
-        );
-      }
-
-      // Seller ka token
-      const sellerFcm = await pool.query(
-        `SELECT fcm_token FROM sellers WHERE id = $1::uuid`, [deliveredOrder.seller_id]
+      await notifyUser(
+        deliveredOrder.buyer_id,
+        buyerFcm.rows[0]?.fcm_token,
+        '✅ Order Deliver Ho Gaya!',
+        `Aapka order #${deliveredOrder.id.slice(-6).toUpperCase()} successfully deliver ho gaya. Apna experience share karein!`,
+        'order_delivered',
+        { orderId: deliveredOrder.id }
       );
-      if (sellerFcm.rows[0]?.fcm_token) {
-        await sendNotification(
+
+      const sellerFcm = await pool.query(
+        `SELECT fcm_token, user_id FROM sellers WHERE id = $1::uuid`, [deliveredOrder.seller_id]
+      );
+      if (sellerFcm.rows[0]) {
+        await notifyUser(
+          sellerFcm.rows[0].user_id,
           sellerFcm.rows[0].fcm_token,
           '🚀 Order Deliver Ho Gaya!',
           `Order #${deliveredOrder.id.slice(-6).toUpperCase()} buyer tak pahunch gaya. ₹${deliveredOrder.total_amount} aapke account mein credit ho gaya.`,
-          { orderId: deliveredOrder.id, type: 'order_delivered_seller' }
+          'order_delivered_seller',
+          { orderId: deliveredOrder.id }
         );
       }
     } catch (fcmErr) {
-      console.error('FCM delivered notification error:', fcmErr.message);
+      console.error('Delivered notification error:', fcmErr.message);
     }
 
     res.json({ message: 'Order marked as delivered!', order: deliveredOrder });
