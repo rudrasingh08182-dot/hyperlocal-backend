@@ -27,7 +27,7 @@ const {
 // image-only memoryImageUpload filter — just a plain size/count cap here.
 const bulkUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024, files: 3 },
+  limits: { fileSize: 20 * 1024 * 1024, files: 4 },
 });
 const bannerUpload = memoryImageUpload({ maxFiles: 1, maxFileSize: 5 * 1024 * 1024 });
 
@@ -58,7 +58,7 @@ router.delete('/banners/:id', deleteBanner);
 // Bulk product upload
 router.post(
   '/bulk-upload/validate',
-  bulkUpload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }, { name: 'variants', maxCount: 1 }]),
+  bulkUpload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }, { name: 'variants', maxCount: 1 }, { name: 'colors', maxCount: 1 }]),
   validateBulkUpload
 );
 router.post('/bulk-upload/:uploadId/import', importBulkUpload);
