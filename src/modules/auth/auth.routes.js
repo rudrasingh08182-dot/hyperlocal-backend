@@ -123,6 +123,28 @@ router.post('/register-delivery', authLimiter, async (req, res) => {
   }
 });
 
+// GET /api/auth/geocode-search?q=... — address autocomplete (OSM proxy)
+const { searchAddress } = require('./geocode.controller');
+router.get('/geocode-search', authMiddleware, searchAddress);
+
+// PATCH /api/auth/save-delivery-location — buyer's own confirmed live/home location
+router.patch('/save-delivery-location', authMiddleware, async (req, res) => {
+  try {
+    const { latitude, longitude, label } = req.body;
+    if (latitude === undefined || longitude === undefined) {
+      return res.status(400).json({ error: 'latitude and longitude are required' });
+    }
+    await pool.query(
+      `UPDATE users SET delivery_latitude = $1, delivery_longitude = $2, delivery_location_label = $3 WHERE id = $4`,
+      [latitude, longitude, label || null, req.user.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save delivery location error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // PATCH /api/auth/fcm-token — Buyer aur Delivery boy ka FCM token save karo
 router.patch('/fcm-token', authMiddleware, async (req, res) => {
   try {

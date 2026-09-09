@@ -2,7 +2,7 @@
 const pool = require('../../config/db');
 const XLSX = require('xlsx');
 const AdmZip = require('adm-zip');
-const cloudinary = require('cloudinary').v2; // adjust path if your Cloudinary config differs
+const cloudinary = require('cloudinary').v2;
 const streamifier = require('streamifier');
 
 const {
@@ -12,9 +12,9 @@ const {
   stripExtensionLower,
   parseImageFileNames,
   validateVariantGroup,
+  validateColorVariantGroup,
 } = require('./bulkUpload.util');
 
-// In-memory store for validated uploads awaiting import.
 const pendingUploads = new Map();
 const UPLOAD_TTL_MS = 30 * 60 * 1000;
 
@@ -38,7 +38,7 @@ function uploadBufferToCloudinary(buffer, folder = 'zaplo_bulk_products') {
 // ─────────────────────────────────────────────
 // STEP: Validate + Preview
 // POST /admin/bulk-upload/validate
-// multipart fields: excel (required), zip (required), variants (OPTIONAL), sellerId
+// multipart fields: excel (required), zip (required), variants (optional), colors (optional), sellerId
 // ─────────────────────────────────────────────
 exports.validateBulkUpload = async (req, res) => {
   try {
@@ -49,19 +49,18 @@ exports.validateBulkUpload = async (req, res) => {
 
     const excelFile = req.files?.excel?.[0];
     const zipFile = req.files?.zip?.[0];
-    const variantsFile = req.files?.variants?.[0]; // OPTIONAL
+    const variantsFile = req.files?.variants?.[0];
+    const colorsFile = req.files?.colors?.[0];
     if (!excelFile) return res.status(400).json({ error: 'Excel file is required' });
     if (!zipFile) return res.status(400).json({ error: 'ZIP file of images is required' });
 
     const sellerCheck = await pool.query('SELECT id FROM sellers WHERE id = $1', [sellerId]);
     if (!sellerCheck.rows[0]) return res.status(404).json({ error: 'Seller not found' });
 
-    // Parse Products.xlsx
     const workbook = XLSX.read(excelFile.buffer, { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
-    // Extract ZIP into a filename -> buffer map
     const zip = new AdmZip(zipFile.buffer);
     const imageMap = new Map();
     zip.getEntries().forEach(entry => {
@@ -70,8 +69,8 @@ exports.validateBulkUpload = async (req, res) => {
       imageMap.set(stripExtensionLower(fullName), entry.getData());
     });
 
-    // ── Parse Variants.xlsx (optional) — group rows by Product Name ──
-    const variantGroups = new Map(); // productNameLower -> array of raw rows
+    // ── Parse Variants.xlsx (optional) ──
+    const variantGroups = new Map();
     if (variantsFile) {
       const vWorkbook = XLSX.read(variantsFile.buffer, { type: 'buffer' });
       const vSheet = vWorkbook.Sheets[vWorkbook.SheetNames[0]];
@@ -84,13 +83,28 @@ exports.validateBulkUpload = async (req, res) => {
       });
     }
 
+    // ── Parse Colors.xlsx (optional) — for fashion Color+Size products ──
+    const colorGroups = new Map();
+    if (colorsFile) {
+      const cWorkbook = XLSX.read(colorsFile.buffer, { type: 'buffer' });
+      const cSheet = cWorkbook.Sheets[cWorkbook.SheetNames[0]];
+      const cRows = XLSX.utils.sheet_to_json(cSheet, { defval: '' });
+      cRows.forEach(r => {
+        const productName = String(r['Product Name'] || '').trim().toLowerCase();
+        if (!productName) return;
+        if (!colorGroups.has(productName)) colorGroups.set(productName, []);
+        colorGroups.get(productName).push(r);
+      });
+    }
+
     const valid = [];
     const invalid = [];
-    const rowWarnings = []; // { row, name, warnings: [...] } — non-blocking notices (e.g. an optional image missing)
+    const rowWarnings = [];
     const seenNames = new Set();
-    const matchedVariantProducts = new Set(); // tracks which variant groups got used
+    const matchedVariantProducts = new Set();
+    const matchedColorProducts = new Set();
 
-   rows.forEach((row, idx) => {
+    rows.forEach((row, idx) => {
       const rowNum = idx + 2;
       const name = String(row['Product Name'] || '').trim();
       const priceRaw = row['Price'];
@@ -110,20 +124,21 @@ exports.validateBulkUpload = async (req, res) => {
 
       const nameKey = name.toLowerCase();
       const hasVariants = variantGroups.has(nameKey);
+      const hasColorVariants = colorGroups.has(nameKey);
 
-      // ── Price: required for Simple Products, optional (auto-computed) for Variant Products ──
+      if (hasVariants && hasColorVariants) {
+        errors.push('Product cannot be in both Variants.xlsx and Colors.xlsx — use only one system');
+      }
+
+      // ── Price/Stock: required for Simple Products, auto-computed for Variant/Color products ──
       let price = null;
-      if (!hasVariants) {
+      let stock = null;
+      if (!hasVariants && !hasColorVariants) {
         const priceMatch = String(priceRaw || '').match(/[\d.]+/);
         price = priceMatch ? parseFloat(priceMatch[0]) : NaN;
         if (!priceRaw || isNaN(price) || price <= 0) {
           errors.push(`Invalid price "${priceRaw}"`);
         }
-      }
-
-      // ── Stock: required for Simple Products, optional (auto-computed) for Variant Products ──
-      let stock = null;
-      if (!hasVariants) {
         stock = parseInt(stockRaw);
         if (stockRaw === '' || isNaN(stock) || stock < 0) {
           errors.push(`Invalid stock quantity "${stockRaw}"`);
@@ -133,14 +148,12 @@ exports.validateBulkUpload = async (req, res) => {
       if (!isValidCategory(category)) errors.push(`Invalid category "${row['Category']}"`);
       if (!isValidUnitType(unitType)) errors.push(`Invalid "Sold By" value "${row['Sold By']}"`);
 
-      // ── Images: comma-separated in one cell. First image is mandatory, up to 4 more are optional. ──
       const imageFileNames = parseImageFileNames(imageFileNameRaw);
       const imageKeys = [];
 
       if (imageFileNames.length === 0) {
         errors.push('Image File Name is missing (at least 1 image is required)');
       } else {
-        // First image — mandatory
         const firstKey = stripExtensionLower(imageFileNames[0]);
         const firstBuffer = imageMap.get(firstKey);
         if (!firstBuffer) {
@@ -148,49 +161,52 @@ exports.validateBulkUpload = async (req, res) => {
         } else {
           imageKeys.push(firstKey);
         }
-
-        // Remaining images — optional. A missing one is a warning, not a blocking error.
         for (let i = 1; i < imageFileNames.length; i++) {
           const key = stripExtensionLower(imageFileNames[i]);
           const buffer = imageMap.get(key);
-          if (buffer) {
-            imageKeys.push(key);
-          } else {
-            warnings.push(`Optional image "${imageFileNames[i]}" not found in ZIP — skipped`);
-          }
+          if (buffer) imageKeys.push(key);
+          else warnings.push(`Optional image "${imageFileNames[i]}" not found in ZIP — skipped`);
         }
       }
 
       if (!description) errors.push('Description is missing');
-
       if (!isValidReturnPolicy(returnPolicy)) errors.push(`Invalid Return Policy "${row['Return Policy']}"`);
 
       if (errors.length > 0) {
         invalid.push({ row: rowNum, name: name || '(no name)', errors });
-        return; // skip variant check — product itself is already invalid
+        return;
       }
 
-      // ── Check for variants belonging to this product ──
+      // ── Simple Variants (weight/size/RAM etc) ──
       let variants = null;
       if (hasVariants) {
         matchedVariantProducts.add(nameKey);
         const group = validateVariantGroup(variantGroups.get(nameKey));
         if (!group.valid) {
-          // Per spec: reject ONLY this product, not the whole file
           invalid.push({ row: rowNum, name, errors: [`Variant errors: ${group.errors.join('; ')}`] });
           return;
         }
         variants = group.variants;
-
-        // Auto-calculate: product.price = minimum variant price
         price = Math.min(...variants.map(v => Number(v.price)));
-        // Auto-calculate: product.stock = sum of all variant stock
         stock = variants.reduce((sum, v) => sum + Number(v.stock), 0);
       }
 
-      if (warnings.length > 0) {
-        rowWarnings.push({ row: rowNum, name, warnings });
+      // ── Color + Size Variants (fashion) ──
+      let colors = null;
+      if (hasColorVariants) {
+        matchedColorProducts.add(nameKey);
+        const group = validateColorVariantGroup(colorGroups.get(nameKey), imageMap);
+        if (!group.valid) {
+          invalid.push({ row: rowNum, name, errors: [`Color variant errors: ${group.errors.join('; ')}`] });
+          return;
+        }
+        colors = group.colors;
+        const allSizes = colors.flatMap(c => c.sizes);
+        price = Math.min(...allSizes.map(s => Number(s.price)));
+        stock = allSizes.reduce((sum, s) => sum + Number(s.stock), 0);
       }
+
+      if (warnings.length > 0) rowWarnings.push({ row: rowNum, name, warnings });
 
       valid.push({
         row: rowNum,
@@ -201,23 +217,31 @@ exports.validateBulkUpload = async (req, res) => {
         unit_type: unitType,
         description,
         return_policy: returnPolicy,
-        imageKeys, // array of matched ZIP keys — 1 to 5 images
+        imageKeys,
         warnings,
-        variants, // null for simple products, array for variant products
+        variants,
+        colors,
       });
     });
 
-    // Variant rows whose Product Name didn't match anything in Products.xlsx
     const orphanVariantErrors = [];
     for (const [productNameLower] of variantGroups.entries()) {
       if (!matchedVariantProducts.has(productNameLower)) {
         orphanVariantErrors.push(`Variants found for "${productNameLower}" but no matching product in Products.xlsx`);
       }
     }
+    const orphanColorErrors = [];
+    for (const [productNameLower] of colorGroups.entries()) {
+      if (!matchedColorProducts.has(productNameLower)) {
+        orphanColorErrors.push(`Colors found for "${productNameLower}" but no matching product in Products.xlsx`);
+      }
+    }
 
-    const simpleCount = valid.filter(p => !p.variants).length;
+    const simpleCount = valid.filter(p => !p.variants && !p.colors).length;
     const variantProductCount = valid.filter(p => p.variants).length;
+    const colorProductCount = valid.filter(p => p.colors).length;
     const totalVariants = valid.reduce((sum, p) => sum + (p.variants?.length || 0), 0);
+    const totalColors = valid.reduce((sum, p) => sum + (p.colors?.length || 0), 0);
 
     const uploadId = `bulk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     pendingUploads.set(uploadId, {
@@ -235,11 +259,14 @@ exports.validateBulkUpload = async (req, res) => {
         invalidCount: invalid.length,
         simpleCount,
         variantProductCount,
+        colorProductCount,
         totalVariants,
+        totalColors,
       },
       preview: valid.slice(0, 50),
       invalid,
       orphanVariantErrors,
+      orphanColorErrors,
       rowWarnings,
     });
   } catch (err) {
@@ -250,7 +277,6 @@ exports.validateBulkUpload = async (req, res) => {
 
 // ─────────────────────────────────────────────
 // STEP: Import
-// POST /admin/bulk-upload/:uploadId/import
 // ─────────────────────────────────────────────
 exports.importBulkUpload = async (req, res) => {
   const { uploadId } = req.params;
@@ -270,7 +296,6 @@ exports.importBulkUpload = async (req, res) => {
       try {
         await client.query('BEGIN');
 
-        // Upload every matched image (1 to 5) for this product to Cloudinary, in order.
         const imageUrls = [];
         for (const key of p.imageKeys) {
           const buffer = imageMap.get(key);
@@ -281,13 +306,14 @@ exports.importBulkUpload = async (req, res) => {
         if (imageUrls.length === 0) imageUrls.push('https://via.placeholder.com/300');
 
         const hasVariants = Array.isArray(p.variants) && p.variants.length > 0;
+        const hasColorVariants = Array.isArray(p.colors) && p.colors.length > 0;
 
         const productResult = await client.query(
           `INSERT INTO products
-           (seller_id, name, description, price, stock, category, image_urls, return_policy, is_available, unit_type, has_variants)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           (seller_id, name, description, price, stock, category, image_urls, return_policy, is_available, unit_type, has_variants, has_color_variants)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
            RETURNING id`,
-          [sellerId, p.name, p.description, p.price, p.stock, p.category, imageUrls, p.return_policy, p.stock > 0, p.unit_type, hasVariants]
+          [sellerId, p.name, p.description, p.price, p.stock, p.category, imageUrls, p.return_policy, p.stock > 0, p.unit_type, hasVariants, hasColorVariants]
         );
 
         const productId = productResult.rows[0].id;
@@ -302,11 +328,37 @@ exports.importBulkUpload = async (req, res) => {
           }
         }
 
+        if (hasColorVariants) {
+          for (const c of p.colors) {
+            const colorImageUrls = [];
+            for (const key of c.imageKeys) {
+              const buffer = imageMap.get(key);
+              if (!buffer) continue;
+              const url = await uploadBufferToCloudinary(buffer, 'zaplo_bulk_colors');
+              colorImageUrls.push(url);
+            }
+
+            const colorResult = await client.query(
+              `INSERT INTO product_colors (product_id, color_name, images, display_order)
+               VALUES ($1, $2, $3, $4) RETURNING id`,
+              [productId, c.color_name, colorImageUrls, c.display_order]
+            );
+            const colorId = colorResult.rows[0].id;
+
+            for (const s of c.sizes) {
+              await client.query(
+                `INSERT INTO product_color_sizes (color_id, size, stock, price)
+                 VALUES ($1, $2, $3, $4)`,
+                [colorId, s.size, s.stock, s.price]
+              );
+            }
+          }
+        }
+
         await client.query('COMMIT');
         results.success++;
       } catch (rowErr) {
         await client.query('ROLLBACK');
-        // Per spec: this product's failure does NOT stop the rest of the import
         results.failed.push({ row: p.row, name: p.name, error: rowErr.message });
       }
     }
@@ -327,9 +379,6 @@ exports.importBulkUpload = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────
-// Download error report as CSV
-// GET /admin/bulk-upload/error-report?rows=<JSON-encoded array>
 // ─────────────────────────────────────────────
 exports.downloadErrorReport = async (req, res) => {
   try {

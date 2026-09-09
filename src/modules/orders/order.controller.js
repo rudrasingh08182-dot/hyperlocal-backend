@@ -13,11 +13,29 @@ exports.placeOrder = async (req, res) => {
     const {
       seller_id, items, payment_method,
       delivery_address, delivery_phone, delivery_landmark,
-      buyer_lat, buyer_lng
+      buyer_lat, buyer_lng, ordering_for_self
     } = req.body;
 
     if (!items || items.length === 0) {
       return res.status(400).json({ error: 'No items in order' });
+    }
+
+    // ── Resolve which lat/lng to use for distance calculation ──
+    // "For self" → trust the buyer's own DB-saved live location (server-side
+    // truth, harder to spoof). "For someone else" → trust the lat/lng sent
+    // from the address search flow, since it's a one-off delivery location.
+    let effectiveBuyerLat = buyer_lat;
+    let effectiveBuyerLng = buyer_lng;
+
+    if (ordering_for_self !== false) {
+      const selfLoc = await pool.query(
+        'SELECT delivery_latitude, delivery_longitude FROM users WHERE id = $1',
+        [req.user.id]
+      );
+      if (selfLoc.rows[0]?.delivery_latitude && selfLoc.rows[0]?.delivery_longitude) {
+        effectiveBuyerLat = selfLoc.rows[0].delivery_latitude;
+        effectiveBuyerLng = selfLoc.rows[0].delivery_longitude;
+      }
     }
 
     // ── Store availability check ──
@@ -101,17 +119,26 @@ exports.placeOrder = async (req, res) => {
     let distanceKm = null;
     let deliveryCharge = 20;
 
-    if (buyer_lat && buyer_lng && seller?.latitude && seller?.longitude) {
+    if (effectiveBuyerLat && effectiveBuyerLng && seller?.latitude && seller?.longitude) {
       distanceKm = await getDrivingDistanceKm(
         parseFloat(seller.latitude), parseFloat(seller.longitude),
-        parseFloat(buyer_lat), parseFloat(buyer_lng)
+        parseFloat(effectiveBuyerLat), parseFloat(effectiveBuyerLng)
       );
       if (distanceKm === null) {
         distanceKm = calculateDistance(
-          parseFloat(buyer_lat), parseFloat(buyer_lng),
+          parseFloat(effectiveBuyerLat), parseFloat(effectiveBuyerLng),
           parseFloat(seller.latitude), parseFloat(seller.longitude)
         );
       }
+
+      const { isServiceableDistance } = require('../../utils/deliveryCharge');
+      if (!isServiceableDistance(distanceKm)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'Sorry, hum abhi wahan available nahi hain, lekin jaldi hi aa rahe hain! 🚀',
+        });
+      }
+
       deliveryCharge = calculateDeliveryCharge(distanceKm);
     }
     const grandTotal = parseFloat(total) + deliveryCharge;
@@ -130,7 +157,7 @@ exports.placeOrder = async (req, res) => {
       [req.user.id, seller_id, initialStatus, payment_method, total,
        deliveryCharge, distanceKm, grandTotal,
        delivery_address, delivery_phone, delivery_landmark,
-       buyer_lat || null, buyer_lng || null]
+       effectiveBuyerLat || null, effectiveBuyerLng || null]
     );
 
     // ── Create order items & reduce stock ATOMICALLY ──
@@ -561,7 +588,6 @@ exports.getDeliveryEstimate = async (req, res) => {
     );
     const seller = sellerResult.rows[0];
 
-    // Seller location not set yet — fall back to minimum flat charge
     if (!seller || !seller.latitude || !seller.longitude) {
       return res.json({ distance_km: null, delivery_charge: 20 });
     }
@@ -577,8 +603,18 @@ exports.getDeliveryEstimate = async (req, res) => {
       );
     }
 
+    const { isServiceableDistance } = require('../../utils/deliveryCharge');
+    if (!isServiceableDistance(distanceKm)) {
+      return res.json({
+        distance_km: distanceKm,
+        delivery_charge: null,
+        serviceable: false,
+        message: 'Sorry, hum abhi wahan available nahi hain, lekin jaldi hi aa rahe hain! 🚀',
+      });
+    }
+
     const charge = calculateDeliveryCharge(distanceKm);
-    res.json({ distance_km: distanceKm, delivery_charge: charge });
+    res.json({ distance_km: distanceKm, delivery_charge: charge, serviceable: true });
   } catch (err) {
     console.error('Delivery estimate error:', err);
     res.status(500).json({ error: 'Internal server error' });

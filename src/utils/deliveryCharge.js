@@ -3,39 +3,42 @@
 // Delivery charge formula (slab-wise):
 // 0–3km      → ₹20 flat
 // 3–5km      → ₹30 flat
-// After 5km  → ₹30 + (distance - 5) × ₹6
+// 5–7km      → ₹30 + (extra_km × ₹6)   [6km=₹36, 7km=₹42]
+// 8–10km     → ₹45 flat
+// 10–15km    → ₹59 flat
+// >15km      → NOT SERVICEABLE (handled by caller, not this function)
 // ─────────────────────────────────────────────────────────────
 
-const TIER1_CHARGE   = 20;   // ₹20 for 0–3km
-const TIER1_KM       = 3;    // first slab limit
-const TIER2_CHARGE   = 30;   // ₹30 for 3–5km
-const BASE_KM        = 5;    // second slab limit
-const PER_EXTRA_KM   = 6;    // ₹6 per km after 5km
+const TIER1_CHARGE   = 20;
+const TIER1_KM       = 3;
+const TIER2_CHARGE   = 30;
+const BASE_KM        = 5;
+const PER_EXTRA_KM   = 6;
+const TIER3_KM       = 7;    // 5–7km uses per-km formula
+const TIER4_CHARGE   = 45;   // 8–10km flat
+const TIER4_KM       = 10;
+const TIER5_CHARGE   = 59;   // 10–15km flat
+const MAX_SERVICEABLE_KM = 15;
 
-/**
- * Calculate delivery charge based on distance
- * @param {number} distanceKm - distance in kilometers
- * @returns {number} delivery charge in rupees
- */
 function calculateDeliveryCharge(distanceKm) {
   if (!distanceKm || distanceKm <= 0) return TIER1_CHARGE;
 
-  if (distanceKm <= TIER1_KM) {
-    return TIER1_CHARGE; // flat ₹20 for 0–3km
+  if (distanceKm <= TIER1_KM) return TIER1_CHARGE;              // 0–3km
+  if (distanceKm <= BASE_KM) return TIER2_CHARGE;                // 3–5km
+  if (distanceKm <= TIER3_KM) {                                  // 5–7km
+    const extraKm = distanceKm - BASE_KM;
+    return TIER2_CHARGE + Math.ceil(extraKm) * PER_EXTRA_KM;
   }
+  if (distanceKm <= TIER4_KM) return TIER4_CHARGE;                // 8–10km
+  if (distanceKm <= MAX_SERVICEABLE_KM) return TIER5_CHARGE;      // 10–15km
 
-  if (distanceKm <= BASE_KM) {
-    return TIER2_CHARGE; // flat ₹30 for 3–5km
-  }
-
-  const extraKm     = distanceKm - BASE_KM;
-  const extraCharge = Math.ceil(extraKm) * PER_EXTRA_KM;
-  return TIER2_CHARGE + extraCharge;
+  return null; // >15km — not serviceable, caller must handle
 }
 
-/**
- * Haversine formula to calculate distance between two coordinates
- */
+function isServiceableDistance(distanceKm) {
+  return distanceKm !== null && distanceKm !== undefined && distanceKm <= MAX_SERVICEABLE_KM;
+}
+
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R    = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -47,4 +50,8 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   return parseFloat((R * c).toFixed(1));
 }
 
-module.exports = { calculateDeliveryCharge, calculateDistance, TIER1_CHARGE, TIER1_KM, TIER2_CHARGE, BASE_KM, PER_EXTRA_KM };
+module.exports = {
+  calculateDeliveryCharge, calculateDistance, isServiceableDistance,
+  MAX_SERVICEABLE_KM,
+  TIER1_CHARGE, TIER1_KM, TIER2_CHARGE, BASE_KM, PER_EXTRA_KM,
+};
