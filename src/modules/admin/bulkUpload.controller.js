@@ -9,6 +9,8 @@ const {
   isValidCategory,
   isValidUnitType,
   isValidReturnPolicy,
+  isValidGender,
+  isValidFootwearType,
   stripExtensionLower,
   parseImageFileNames,
   validateVariantGroup,
@@ -114,9 +116,16 @@ exports.validateBulkUpload = async (req, res) => {
       const imageFileNameRaw = String(row['Image File Name'] || '').trim();
       const description = String(row['Description'] || '').trim();
       const returnPolicy = String(row['Return Policy'] || '').toUpperCase().trim();
+      const gender = String(row['Gender'] || '').toLowerCase().trim();
+      const footwearType = String(row['Footwear Type'] || '').toLowerCase().trim();
 
       const errors = [];
       const warnings = [];
+
+      if (category === 'footwear') {
+        if (!isValidGender(gender)) errors.push(`Invalid Gender "${row['Gender']}" — must be men or women (required for footwear)`);
+        if (!isValidFootwearType(footwearType)) errors.push(`Invalid Footwear Type "${row['Footwear Type']}" — must be slippers, sandals or shoes`);
+      }
 
       if (!name) errors.push('Product Name is missing');
       if (seenNames.has(name.toLowerCase())) errors.push('Duplicate product name in this file');
@@ -221,6 +230,8 @@ exports.validateBulkUpload = async (req, res) => {
         warnings,
         variants,
         colors,
+        gender: category === 'footwear' ? gender : null,
+        footwear_type: category === 'footwear' ? footwearType : null,
       });
     });
 
@@ -310,10 +321,10 @@ exports.importBulkUpload = async (req, res) => {
 
         const productResult = await client.query(
           `INSERT INTO products
-           (seller_id, name, description, price, stock, category, image_urls, return_policy, is_available, unit_type, has_variants, has_color_variants)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           (seller_id, name, description, price, stock, category, image_urls, return_policy, is_available, unit_type, has_variants, has_color_variants, gender, footwear_type)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
            RETURNING id`,
-          [sellerId, p.name, p.description, p.price, p.stock, p.category, imageUrls, p.return_policy, p.stock > 0, p.unit_type, hasVariants, hasColorVariants]
+          [sellerId, p.name, p.description, p.price, p.stock, p.category, imageUrls, p.return_policy, p.stock > 0, p.unit_type, hasVariants, hasColorVariants, p.gender, p.footwear_type]
         );
 
         const productId = productResult.rows[0].id;

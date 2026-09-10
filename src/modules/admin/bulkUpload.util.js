@@ -1,7 +1,16 @@
 // bulkUpload.util.js
 // Validation helpers for bulk product upload.
 
-const VALID_CATEGORIES = ['grocery', 'fresh', 'electronics', 'fashion', 'food', 'stationery', 'medical', 'sweets', 'beauty'];
+const VALID_CATEGORIES = ['grocery', 'fresh', 'electronics', 'fashion', 'food', 'sweets', 'beauty', 'footwear', 'kids_zone'];
+const VALID_GENDERS = ['men', 'women'];
+const VALID_FOOTWEAR_TYPES = ['slippers', 'sandals', 'shoes'];
+
+function isValidGender(g) {
+  return VALID_GENDERS.includes((g || '').toLowerCase().trim());
+}
+function isValidFootwearType(t) {
+  return VALID_FOOTWEAR_TYPES.includes((t || '').toLowerCase().trim());
+}
 
 const VALID_UNIT_TYPES = [
   'piece', 'kg', 'gram', 'quintal', 'litre', 'ml', 'dozen', 'packet', 'box', 'bundle',
@@ -11,7 +20,7 @@ const VALID_UNIT_TYPES = [
 
 const VALID_RETURN_POLICIES = [
   'PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS',
-  'STATIONERY', 'FASHION', 'GROCERY', 'FRESH', 'BEAUTY_ACCESSORIES',
+  'STATIONERY', 'FASHION', 'GROCERY', 'FRESH', 'BEAUTY_ACCESSORIES', 'FOOTWEAR','KIDS_ZONE',
 ];
 
 const MAX_IMAGES_PER_PRODUCT = 5;
@@ -159,11 +168,15 @@ module.exports = {
   VALID_CATEGORIES,
   VALID_UNIT_TYPES,
   VALID_RETURN_POLICIES,
+  VALID_GENDERS,
+  VALID_FOOTWEAR_TYPES,
   MAX_IMAGES_PER_PRODUCT,
   MAX_COLOR_IMAGES,
   isValidCategory,
   isValidUnitType,
   isValidReturnPolicy,
+  isValidGender,
+  isValidFootwearType,
   stripExtensionLower,
   parseImageFileNames,
   parseColorImageFileNames,

@@ -8,7 +8,7 @@ exports.searchProducts = async (req, res) => {
       SELECT p.id, p.name, p.description, p.price, p.stock,
               p.category, p.image_urls, p.is_available,
               p.unit_type, p.unit_weight, p.price_per_kg, p.return_policy,
-              p.has_variants, p.seller_pincode,
+              p.has_variants, p.seller_pincode, p.gender, p.footwear_type,
               p.seller_id as shop_id, p.seller_id,
               s.shop_name, s.locality, s.id as seller_id, s.is_online as seller_is_online,
               COALESCE(
@@ -79,11 +79,11 @@ exports.addProduct = async (req, res) => {
     if (!seller.rows[0]) return res.status(404).json({ error: 'Seller profile not found' });
     const sellerPincode = seller.rows[0].pincode || req.user?.pincode || null;
 
-    const { name, description, price, category, stock, image_url, image_urls, return_policy, unit_type, unit_weight, price_per_kg, sku } = req.body;
+    const { name, description, price, category, stock, image_url, image_urls, return_policy, unit_type, unit_weight, price_per_kg, sku, gender, footwear_type } = req.body;
     const result = await pool.query(
-      `INSERT INTO products (seller_id, seller_pincode, name, description, price, category, stock, image_url, image_urls, return_policy, unit_type, unit_weight, price_per_kg, sku)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-      [seller.rows[0].id, sellerPincode, name, description, price, category, stock || 0, image_url || null, image_urls || null, return_policy || null, unit_type || 'piece', unit_weight || null, price_per_kg || null, sku || null]
+      `INSERT INTO products (seller_id, seller_pincode, name, description, price, category, stock, image_url, image_urls, return_policy, unit_type, unit_weight, price_per_kg, sku, gender, footwear_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+      [seller.rows[0].id, sellerPincode, name, description, price, category, stock || 0, image_url || null, image_urls || null, return_policy || null, unit_type || 'piece', unit_weight || null, price_per_kg || null, sku || null, gender || null, footwear_type || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
