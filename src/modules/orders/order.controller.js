@@ -98,6 +98,42 @@ exports.placeOrder = async (req, res) => {
         }
         total += parseFloat(variant.rows[0].price) * item.quantity;
         itemDetails.push({ ...item, unit_price: variant.rows[0].price, variant: variant.rows[0] });
+      } else if (item.variant_combination_id) {
+        // ── Universal V2 variant system ──
+        const combo = await client.query(
+          `SELECT c.id, c.price, c.stock, c.is_active, c.product_id, p.price as product_price
+           FROM product_variant_combinations_v2 c
+           JOIN products p ON p.id = c.product_id
+           WHERE c.id = $1::uuid AND c.product_id = $2::uuid FOR UPDATE`,
+          [item.variant_combination_id, item.product_id]
+        );
+        if (!combo.rows[0] || !combo.rows[0].is_active) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Selected variant is no longer available' });
+        }
+        if (combo.rows[0].stock < item.quantity) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Selected variant is out of stock' });
+        }
+        // Effective price never trusts the frontend — falls back to base
+        // product price if this combination doesn't override it.
+        const effectivePrice = combo.rows[0].price !== null ? combo.rows[0].price : combo.rows[0].product_price;
+
+        // Human-readable snapshot ({"Color":"Black","Size":"8"}) so the
+        // order still shows what was bought even if the seller edits the
+        // variant configuration later.
+        const selectionsResult = await client.query(
+          `SELECT g.name, o.value FROM product_variant_combination_items_v2 ci
+           JOIN product_variant_options_v2 o ON o.id = ci.option_id
+           JOIN product_variant_groups_v2 g ON g.id = o.variant_group_id
+           WHERE ci.combination_id = $1::uuid`,
+          [item.variant_combination_id]
+        );
+        const variantSnapshot = {};
+        selectionsResult.rows.forEach(r => { variantSnapshot[r.name] = r.value; });
+
+        total += parseFloat(effectivePrice) * item.quantity;
+        itemDetails.push({ ...item, unit_price: effectivePrice, v2Combo: combo.rows[0], variantSnapshot });
       } else {
         if (product.rows[0].stock < item.quantity) {
           await client.query('ROLLBACK');
@@ -165,8 +201,8 @@ exports.placeOrder = async (req, res) => {
     // so two simultaneous orders can never both succeed against a stock of 1.
     for (const item of itemDetails) {
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value, color_size_id, color_name, size)
-         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7, $8::uuid, $9, $10)`,
+        `INSERT INTO order_items (order_id, product_id, quantity, unit_price, variant_id, variant_type, variant_value, color_size_id, color_name, size, variant_combination_id, variant_snapshot)
+         VALUES ($1, $2::uuid, $3, $4, $5::uuid, $6, $7, $8::uuid, $9, $10, $11::uuid, $12::jsonb)`,
         [
           order.rows[0].id,
           item.product_id,
@@ -178,6 +214,8 @@ exports.placeOrder = async (req, res) => {
           item.color_size_id || null,
           item.colorSize?.color_name || null,
           item.colorSize?.size || null,
+          item.variant_combination_id || null,
+          item.variantSnapshot ? JSON.stringify(item.variantSnapshot) : null,
         ]
       );
 
@@ -199,6 +237,24 @@ exports.placeOrder = async (req, res) => {
           await client.query('ROLLBACK');
           return res.status(400).json({ error: `Insufficient stock for ${item.variant.variant_value} — someone just bought it` });
         }
+      } else if (item.variant_combination_id) {
+        // ── Universal V2 variant system — atomic check-and-decrement ──
+        const stockUpdate = await client.query(
+          `UPDATE product_variant_combinations_v2 SET stock = stock - $1, updated_at = NOW() WHERE id = $2::uuid AND stock >= $1 RETURNING id`,
+          [item.quantity, item.variant_combination_id]
+        );
+        if (stockUpdate.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Selected variant just sold out — someone else bought it' });
+        }
+        // Audit trail — best-effort, keyed so the SAME order can never
+        // double-decrement the same combination (e.g. on a retried request).
+        await client.query(
+          `INSERT INTO inventory_transactions_v2 (product_id, variant_combination_id, order_id, quantity_change, reason)
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, 'SALE')
+           ON CONFLICT (order_id, variant_combination_id, reason) DO NOTHING`,
+          [item.product_id, item.variant_combination_id, order.rows[0].id, -item.quantity]
+        );
       } else {
         const stockUpdate = await client.query(
           `UPDATE products SET stock = stock - $1 WHERE id=$2::uuid AND stock >= $1 RETURNING id`,
@@ -320,7 +376,9 @@ exports.getMyOrders = async (req, res) => {
                 'unit_price', oi.unit_price,
                 'name', p.name,
                 'variant_type', oi.variant_type,
-                'variant_value', oi.variant_value
+                'variant_value', oi.variant_value,
+                'variant_combination_id', oi.variant_combination_id,
+                'variant_snapshot', oi.variant_snapshot
               )) as items
        FROM orders o
        JOIN sellers s ON o.seller_id = s.id
