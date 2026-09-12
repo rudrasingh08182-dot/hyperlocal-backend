@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, updateProfile } = require('./auth.controller');
+const { register, login, buyerEntry, updateProfile } = require('./auth.controller');
 const authMiddleware = require('../../middleware/auth.middleware');
 const pool = require('../../config/db');
 const { createRateLimiter } = require('../../middleware/rateLimit.middleware');
@@ -10,8 +10,12 @@ const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
 // POST /api/auth/register (Buyer)
 router.post('/register', authLimiter, register);
 
-// POST /api/auth/login
+// POST /api/auth/login — Staff only (Seller / Delivery / Admin)
 router.post('/login', authLimiter, login);
+
+// POST /api/auth/buyer-entry — Passwordless buyer entry (phone + pincode)
+// NOTE: serviceable=false is NOT a failure here — always returns 200 + JWT.
+router.post('/buyer-entry', authLimiter, buyerEntry);
 
 // PATCH /api/auth/profile — Update address & pincode
 router.patch('/profile', authMiddleware, updateProfile);
@@ -44,7 +48,7 @@ router.post('/register-seller', authLimiter, async (req, res) => {
     const password_hash = await bcrypt.hash(password, 10);
     const userResult = await pool.query(
       `INSERT INTO users (username, name, phone, password_hash, role, address, pincode, serviceable)
-       VALUES ($1, $2, $3, $4, 'seller', $5, $6, $7) 
+       VALUES ($1, $2, $3, $4, 'seller', $5, $6, $7)
        RETURNING id, name, username, phone, address, pincode, serviceable`,
       [username, name, phone, password_hash, address, pincode.trim(), isServiceable]
     );
@@ -99,7 +103,7 @@ router.post('/register-delivery', authLimiter, async (req, res) => {
     const password_hash = await bcrypt.hash(password, 10);
     const userResult = await pool.query(
       `INSERT INTO users (username, name, phone, password_hash, role, address, pincode, serviceable)
-       VALUES ($1, $2, $3, $4, 'delivery', $5, $6, $7) 
+       VALUES ($1, $2, $3, $4, 'delivery', $5, $6, $7)
        RETURNING id, name, username, phone, address, pincode, serviceable`,
       [username, name, phone, password_hash, address, pincode.trim(), isServiceable]
     );
