@@ -14,7 +14,8 @@ const {
   getAllSellers, getAllBuyers, approveSeller, suspendSeller,
   getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy,
   getSellerSalesLast7Days,
-  getServiceablePincodes, addServiceablePincode, removeServiceablePincode, getWaitingPincodes
+  getServiceablePincodes, addServiceablePincode, removeServiceablePincode, getWaitingPincodes,
+  adminCreateProduct, adminCreateProductVariants
 } = require('./admin.controller');
 const {
   validateBulkUpload, importBulkUpload, downloadErrorReport
@@ -62,8 +63,8 @@ router.post(
   validateBulkUpload
 );
 
-router.post('/products', auth, role('admin'), adminController.adminCreateProduct);
-router.post('/products/:id/variants', auth, role('admin'), adminController.adminCreateProductVariants);
+router.post('/products', adminCreateProduct);
+router.post('/products/:id/variants', adminCreateProductVariants);
 router.post('/bulk-upload/:uploadId/import', importBulkUpload);
 router.get('/bulk-upload/error-report', downloadErrorReport);
 
