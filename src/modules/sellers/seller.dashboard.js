@@ -130,9 +130,16 @@ exports.createProduct = async (req, res) => {
       return_policy, variants, // variants is OPTIONAL: array of { variant_type, variant_value, price, stock, display_order }
     } = req.body;
 
-    if (!name || !price || !stock || !return_policy) {
+    // Some categories (e.g. sweets sold loose/fresh) don't need an exact
+    // count — the seller just marks it available and it stays "in stock"
+    // until they say otherwise.
+    const STOCK_OPTIONAL_CATEGORIES = ['sweets'];
+    const stockOptional = STOCK_OPTIONAL_CATEGORIES.includes((category || '').toLowerCase());
+
+    if (!name || !price || (!stockOptional && !stock) || !return_policy) {
       return res.status(400).json({ error: 'name, price, stock, return_policy are required' });
     }
+    const effectiveStock = stock ? parseInt(stock) : (stockOptional ? 999 : 0);
 
     const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS', 'STATIONERY', 'FASHION', 'GROCERY', 'FRESH', 'MEDICAL'];
     if (!validPolicies.includes(return_policy)) {
@@ -196,9 +203,9 @@ exports.createProduct = async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
       [seller.rows[0].id, name, description, sku,
-       pricePaise / 100, parseInt(stock),
+       pricePaise / 100, effectiveStock,
        category, image_urls, return_policy,
-       parseInt(stock) > 0,
+       effectiveStock > 0,
        req.body.unit_type || 'piece',
        req.body.unit_weight || null,
        req.body.price_per_kg || null,

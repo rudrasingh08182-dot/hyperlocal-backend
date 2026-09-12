@@ -61,6 +61,9 @@ router.post(
   bulkUpload.fields([{ name: 'excel', maxCount: 1 }, { name: 'zip', maxCount: 1 }, { name: 'variants', maxCount: 1 }, { name: 'colors', maxCount: 1 }]),
   validateBulkUpload
 );
+
+router.post('/products', auth, role('admin'), adminController.adminCreateProduct);
+router.post('/products/:id/variants', auth, role('admin'), adminController.adminCreateProductVariants);
 router.post('/bulk-upload/:uploadId/import', importBulkUpload);
 router.get('/bulk-upload/error-report', downloadErrorReport);
 

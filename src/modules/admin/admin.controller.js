@@ -1,4 +1,6 @@
 const pool = require('../../config/db');
+const sellerDashboard = require('../sellers/seller.dashboard');
+const variantController = require('../products/variant.controller');
 
 exports.getAllSellers = async (req, res) => {
   try {
@@ -186,6 +188,43 @@ exports.addServiceablePincode = async (req, res) => {
     await pool.query('UPDATE users SET serviceable = true WHERE pincode = $1', [cleanPincode]);
 
     res.status(201).json({ message: 'Pincode activated successfully', pincode: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /api/admin/products — admin creates a product on behalf of a shop.
+// This is the SAME logic sellers use (createProduct) — we just "impersonate"
+// the target seller's user_id so the existing ownership/validation code
+// resolves correctly, with zero duplication and zero risk of drifting out
+// of sync with the seller flow.
+exports.adminCreateProduct = async (req, res) => {
+  try {
+    const { seller_id } = req.body;
+    if (!seller_id) return res.status(400).json({ error: 'seller_id is required' });
+
+    const sellerRow = await pool.query('SELECT user_id FROM sellers WHERE id = $1::uuid', [seller_id]);
+    if (!sellerRow.rows[0]) return res.status(404).json({ error: 'Shop not found' });
+
+    req.user = { ...req.user, id: sellerRow.rows[0].user_id };
+    return sellerDashboard.createProduct(req, res);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /api/admin/products/:id/variants — admin attaches V2 variants to a
+// product, on behalf of whichever seller owns it. Same impersonation trick.
+exports.adminCreateProductVariants = async (req, res) => {
+  try {
+    const productRow = await pool.query(
+      `SELECT s.user_id FROM products p JOIN sellers s ON p.seller_id = s.id WHERE p.id = $1::uuid`,
+      [req.params.id]
+    );
+    if (!productRow.rows[0]) return res.status(404).json({ error: 'Product not found' });
+
+    req.user = { ...req.user, id: productRow.rows[0].user_id };
+    return variantController.createVariants(req, res);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
