@@ -1,4 +1,5 @@
 const pool = require('../../config/db');
+const { sanitizeAttributes } = require('../../utils/sanitizeAttributes');
 exports.searchProducts = async (req, res) => {
   try {
     const { q, pincode: queryPincode } = req.query;
@@ -105,6 +106,7 @@ exports.updateProduct = async (req, res) => {
     const {
       name, description, price, category, stock, image_urls,
       return_policy, unit_type, unit_weight, price_per_kg, sku,
+      attributes, subcategory,
     } = req.body;
 
     // COALESCE pattern — any field NOT sent in the request keeps its existing
@@ -122,14 +124,18 @@ exports.updateProduct = async (req, res) => {
         unit_weight = COALESCE($9, unit_weight),
         price_per_kg = COALESCE($10, price_per_kg),
         sku = COALESCE($11, sku),
+        attributes = COALESCE($12::jsonb, attributes),
+        subcategory = COALESCE($13, subcategory),
         is_available = CASE WHEN $5::int IS NOT NULL THEN $5::int > 0 ELSE is_available END
-       WHERE id = $12::uuid
+       WHERE id = $14::uuid
        RETURNING *`,
       [
         name || null, description || null, price || null, category || null,
         stock !== undefined ? parseInt(stock) : null,
         image_urls || null, return_policy || null, unit_type || null,
         unit_weight || null, price_per_kg || null, sku || null,
+        attributes ? JSON.stringify(sanitizeAttributes(attributes)) : null,
+        subcategory || null,
         id,
       ]
     );

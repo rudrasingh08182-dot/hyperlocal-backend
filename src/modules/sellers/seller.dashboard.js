@@ -1,5 +1,5 @@
 const pool = require('../../config/db');
-
+const { sanitizeAttributes } = require('../../utils/sanitizeAttributes');
 // GET /api/sellers/dashboard
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -128,6 +128,7 @@ exports.createProduct = async (req, res) => {
     const {
       name, description, sku, price, stock, category, image_urls,
       return_policy, variants, // variants is OPTIONAL: array of { variant_type, variant_value, price, stock, display_order }
+      attributes, subcategory, // dynamic category-specific fields (e.g. Brand, RAM, Ingredients)
     } = req.body;
 
     // Some categories (e.g. sweets sold loose/fresh) don't need an exact
@@ -199,8 +200,9 @@ exports.createProduct = async (req, res) => {
       `INSERT INTO products
        (seller_id, name, description, sku, price, stock,
         category, image_urls, return_policy, is_available,
-        unit_type, unit_weight, price_per_kg, has_variants)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        unit_type, unit_weight, price_per_kg, has_variants,
+        attributes, subcategory)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [seller.rows[0].id, name, description, sku,
        pricePaise / 100, effectiveStock,
@@ -209,7 +211,9 @@ exports.createProduct = async (req, res) => {
        req.body.unit_type || 'piece',
        req.body.unit_weight || null,
        req.body.price_per_kg || null,
-       hasVariants]
+       hasVariants,
+       JSON.stringify(sanitizeAttributes(attributes)),
+       subcategory || null]
     );
 
     const product = result.rows[0];
