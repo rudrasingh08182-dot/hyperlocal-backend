@@ -136,11 +136,15 @@ exports.createProduct = async (req, res) => {
     // until they say otherwise.
     const STOCK_OPTIONAL_CATEGORIES = ['sweets'];
     const stockOptional = STOCK_OPTIONAL_CATEGORIES.includes((category || '').toLowerCase());
+    // stock === 0 is a REAL, intentional value (variant products send 0 —
+    // their actual stock lives on the variant combinations). Only treat
+    // it as "missing" when it's actually undefined/null/empty-string.
+    const stockMissing = stock === undefined || stock === null || stock === '';
 
-    if (!name || !price || (!stockOptional && !stock) || !return_policy) {
+    if (!name || !price || (!stockOptional && stockMissing) || !return_policy) {
       return res.status(400).json({ error: 'name, price, stock, return_policy are required' });
     }
-    const effectiveStock = stock ? parseInt(stock) : (stockOptional ? 999 : 0);
+    const effectiveStock = !stockMissing ? parseInt(stock) : (stockOptional ? 999 : 0);
 
     const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS', 'STATIONERY', 'FASHION', 'GROCERY', 'FRESH', 'MEDICAL'];
     if (!validPolicies.includes(return_policy)) {
