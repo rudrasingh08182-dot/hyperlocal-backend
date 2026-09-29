@@ -146,7 +146,7 @@ exports.createProduct = async (req, res) => {
     }
     const effectiveStock = !stockMissing ? parseInt(stock) : (stockOptional ? 999 : 0);
 
-    const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'STANDARD_ELECTRONICS', 'HIGH_VALUE_ELECTRONICS', 'STATIONERY', 'FASHION', 'GROCERY', 'FRESH', 'MEDICAL'];
+    const validPolicies = ['PERISHABLE_FOOD', 'PACKAGED_FOOD', 'FASHION', 'GROCERY', 'FRESH', 'MEDICAL'];
     if (!validPolicies.includes(return_policy)) {
       return res.status(400).json({ error: `Invalid return_policy. Must be one of: ${validPolicies.join(', ')}` });
     }
