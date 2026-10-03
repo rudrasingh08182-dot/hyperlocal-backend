@@ -41,9 +41,16 @@ exports.getDashboardStats = async (req, res) => {
          o.delivery_payment_confirmed, o.delivery_payment_method, o.delivery_payment_proof_url,
          COUNT(oi.id) as item_count,
          json_agg(json_build_object(
+           'product_id', p.id,
            'name', p.name,
            'quantity', oi.quantity,
-           'unit_price', oi.unit_price
+           'unit_price', oi.unit_price,
+           'image_url', to_jsonb(p.image_urls) ->> 0,
+           'color_name', oi.color_name,
+           'size', oi.size,
+           'variant_type', oi.variant_type,
+           'variant_value', oi.variant_value,
+           'variant_snapshot', oi.variant_snapshot
          )) as items
   FROM orders o
   JOIN users u ON o.buyer_id = u.id
