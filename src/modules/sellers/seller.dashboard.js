@@ -136,6 +136,7 @@ exports.createProduct = async (req, res) => {
       name, description, sku, price, stock, category, image_urls,
       return_policy, variants, // variants is OPTIONAL: array of { variant_type, variant_value, price, stock, display_order }
       attributes, subcategory, // dynamic category-specific fields (e.g. Brand, RAM, Ingredients)
+      gender, footwear_type,
     } = req.body;
 
     // Some categories (e.g. sweets sold loose/fresh) don't need an exact
@@ -212,8 +213,8 @@ exports.createProduct = async (req, res) => {
        (seller_id, name, description, sku, price, stock,
         category, image_urls, return_policy, is_available,
         unit_type, unit_weight, price_per_kg, has_variants,
-        attributes, subcategory)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        attributes, subcategory, gender, footwear_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [seller.rows[0].id, name, description, sku,
        pricePaise / 100, effectiveStock,
@@ -224,7 +225,9 @@ exports.createProduct = async (req, res) => {
        req.body.price_per_kg || null,
        hasVariants,
        JSON.stringify(sanitizeAttributes(attributes)),
-       subcategory || null]
+       subcategory || null,
+       gender || null,
+       footwear_type || null]
     );
 
     const product = result.rows[0];

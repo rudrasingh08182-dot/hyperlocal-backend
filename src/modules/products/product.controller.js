@@ -107,7 +107,7 @@ exports.updateProduct = async (req, res) => {
     const {
       name, description, price, category, stock, image_urls,
       return_policy, unit_type, unit_weight, price_per_kg, sku,
-      attributes, subcategory,
+      attributes, subcategory, gender, footwear_type,
     } = req.body;
 
     // COALESCE pattern — any field NOT sent in the request keeps its existing
@@ -127,6 +127,8 @@ exports.updateProduct = async (req, res) => {
         sku = COALESCE($11, sku),
         attributes = COALESCE($12::jsonb, attributes),
         subcategory = COALESCE($13, subcategory),
+        gender = COALESCE($15, gender),
+        footwear_type = COALESCE($16, footwear_type),
         is_available = CASE WHEN $5::int IS NOT NULL THEN $5::int > 0 ELSE is_available END
        WHERE id = $14::uuid
        RETURNING *`,
@@ -138,6 +140,8 @@ exports.updateProduct = async (req, res) => {
         attributes ? JSON.stringify(sanitizeAttributes(attributes)) : null,
         subcategory || null,
         id,
+        gender || null,
+        footwear_type || null,
       ]
     );
 
