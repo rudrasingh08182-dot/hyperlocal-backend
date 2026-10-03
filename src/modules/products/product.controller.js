@@ -10,6 +10,7 @@ exports.searchProducts = async (req, res) => {
               p.category, p.image_urls, p.is_available,
               p.unit_type, p.unit_weight, p.price_per_kg, p.return_policy,
               p.has_variants, p.variant_system, p.seller_pincode, p.gender, p.footwear_type,
+              p.attributes, p.subcategory,
               p.seller_id as shop_id, p.seller_id,
               s.shop_name, s.locality, s.id as seller_id, s.is_online as seller_is_online,
               COALESCE(
