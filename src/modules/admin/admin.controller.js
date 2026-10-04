@@ -30,7 +30,7 @@ exports.resetSellerPassword = async (req, res) => {
     if (!seller.rows[0]) return res.status(404).json({ error: 'Seller not found' });
 
     const hash = await bcrypt.hash(newPassword, 10);
-    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hash, seller.rows[0].user_id]);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, seller.rows[0].user_id]);
 
     res.json({ message: 'Password reset successfully' });
   } catch (err) {
