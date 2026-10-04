@@ -1,16 +1,38 @@
 const pool = require('../../config/db');
+const bcrypt = require('bcryptjs');
 const sellerDashboard = require('../sellers/seller.dashboard');
 const variantController = require('../products/variant.controller');
 
 exports.getAllSellers = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT s.id, u.username, u.name, u.phone, s.shop_name, s.status, s.created_at
+      `SELECT s.id, u.username, u.name, u.phone, s.contact_phone, s.shop_name, s.status, s.created_at
        FROM sellers s
        JOIN users u ON s.user_id = u.id
        ORDER BY s.created_at DESC`
     );
     res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PATCH /api/admin/sellers/:id/reset-password
+exports.resetSellerPassword = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const newPassword = String(req.body.new_password || '').trim();
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password kam se kam 6 characters ka hona chahiye' });
+    }
+
+    const seller = await pool.query('SELECT user_id FROM sellers WHERE id = $1::uuid', [id]);
+    if (!seller.rows[0]) return res.status(404).json({ error: 'Seller not found' });
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hash, seller.rows[0].user_id]);
+
+    res.json({ message: 'Password reset successfully' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

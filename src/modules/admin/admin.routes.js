@@ -15,7 +15,7 @@ const {
   getAllDeliveryBoys, approveDeliveryBoy, suspendDeliveryBoy,
   getSellerSalesLast7Days,
   getServiceablePincodes, addServiceablePincode, removeServiceablePincode, getWaitingPincodes,
-  adminCreateProduct, adminCreateProductVariants
+  adminCreateProduct, adminCreateProductVariants, resetSellerPassword
 } = require('./admin.controller');
 const {
   validateBulkUpload, importBulkUpload, downloadErrorReport
@@ -38,6 +38,7 @@ router.get('/sellers', getAllSellers);
 router.get('/buyers', getAllBuyers);
 router.patch('/sellers/:id/approve', approveSeller);
 router.patch('/sellers/:id/suspend', suspendSeller);
+router.patch('/sellers/:id/reset-password', resetSellerPassword);
 router.get('/sellers/:id/sales-last-7-days', getSellerSalesLast7Days);
 router.get('/delivery-boys', getAllDeliveryBoys);
 router.patch('/delivery-boys/:id/approve', approveDeliveryBoy);
