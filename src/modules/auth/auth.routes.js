@@ -25,6 +25,9 @@ router.post('/register-seller', authLimiter, async (req, res) => {
   try {
     const { username, name, phone, password, shop_name, address, locality, contact_phone, pincode } = req.body;
 
+    if (typeof password === 'string' && /\s/.test(password)) {
+      return res.status(400).json({ error: 'Space not allowed in password' });
+    }
     if (!username || !name || !phone || !password || !shop_name || !address || !locality || !pincode) {
       return res.status(400).json({ error: 'All fields are required' });
     }
@@ -80,6 +83,9 @@ router.post('/register-delivery', authLimiter, async (req, res) => {
       vehicle_type, vehicle_number, locality, address, pincode
     } = req.body;
 
+    if (typeof password === 'string' && /\s/.test(password)) {
+      return res.status(400).json({ error: 'Space not allowed in password' });
+    }
     if (!username || !name || !phone || !password || !pincode) {
       return res.status(400).json({ error: 'All fields are required' });
     }
@@ -163,6 +169,49 @@ router.patch('/fcm-token', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('FCM token save error (user):', err.message);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/auth/reset-password-otp — Firebase OTP verify karke naya password set
+router.post('/reset-password-otp', authLimiter, async (req, res) => {
+  try {
+    const { id_token, new_password } = req.body;
+    if (!id_token || typeof new_password !== 'string') {
+      return res.status(400).json({ error: 'Invalid request' });
+    }
+    if (/\s/.test(new_password)) {
+      return res.status(400).json({ error: 'Space not allowed in password' });
+    }
+    if (new_password.length < 6 || new_password.length > 128) {
+      return res.status(400).json({ error: 'Password 6 se 128 characters ka hona chahiye' });
+    }
+
+    require('../../config/firebase'); // Firebase Admin init ensure
+    const admin = require('firebase-admin');
+    const decoded = await admin.auth().verifyIdToken(id_token);
+    if (!decoded.phone_number) {
+      return res.status(400).json({ error: 'Phone verification failed' });
+    }
+
+    const digits = decoded.phone_number.replace(/\D/g, '').slice(-10);
+    const found = await pool.query(
+      `SELECT id FROM users
+       WHERE RIGHT(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
+       AND role IN ('seller', 'delivery')`,
+      [digits]
+    );
+    if (found.rows.length === 0) {
+      return res.status(404).json({ error: 'Is number se koi Seller/Delivery account nahi mila' });
+    }
+
+    const bcrypt = require('bcryptjs');
+    const hash = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, found.rows[0].id]);
+
+    res.json({ message: 'Password reset successful' });
+  } catch (err) {
+    console.error('Reset password OTP error:', err.message);
+    res.status(400).json({ error: 'OTP verification failed. Please try again.' });
   }
 });
 

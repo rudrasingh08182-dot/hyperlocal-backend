@@ -22,6 +22,9 @@ exports.resetSellerPassword = async (req, res) => {
   try {
     const { id } = req.params;
     const newPassword = String(req.body.new_password || '').trim();
+    if (/\s/.test(newPassword)) {
+      return res.status(400).json({ error: 'Password mein space allowed nahi hai' });
+    }
     if (newPassword.length < 6) {
       return res.status(400).json({ error: 'Password kam se kam 6 characters ka hona chahiye' });
     }
