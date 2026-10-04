@@ -187,8 +187,8 @@ router.post('/reset-password-otp', authLimiter, async (req, res) => {
     }
 
     require('../../config/firebase'); // Firebase Admin init ensure
-    const admin = require('firebase-admin');
-    const decoded = await admin.auth().verifyIdToken(id_token);
+    const { getAuth } = require('firebase-admin/auth');
+    const decoded = await getAuth().verifyIdToken(id_token);
     if (!decoded.phone_number) {
       return res.status(400).json({ error: 'Phone verification failed' });
     }
